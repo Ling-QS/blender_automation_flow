@@ -1,12 +1,13 @@
 import importlib
 
+from ..runtime_core.module_loading import bind_module_exports
+
 
 helpers = importlib.import_module(f"{__name__}.helpers")
 refs = importlib.import_module(f"{__name__}.refs")
 
 for _module in (helpers, refs):
-    for _name in getattr(_module, "__all__", ()):
-        globals()[_name] = getattr(_module, _name)
+    bind_module_exports(globals(), _module)
 
 _MODULE_CACHE = {
     "helpers": helpers,
@@ -20,8 +21,7 @@ def _load_module(module_name):
         module = importlib.import_module(f"{__name__}.{module_name}")
         _MODULE_CACHE[module_name] = module
         globals()[module_name] = module
-        for export_name in getattr(module, "__all__", ()):
-            globals()[export_name] = getattr(module, export_name)
+        bind_module_exports(globals(), module)
     return module
 
 

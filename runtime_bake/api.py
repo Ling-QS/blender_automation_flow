@@ -13,6 +13,7 @@ from ..runtime_core.constants import (
     TASK_KIND_PHYSICS,
     TASK_KIND_PHYSICS_BAKE_ALL,
 )
+from ..runtime_core.module_loading import bind_partial_export
 from ..runtime_state.cache import (
     _capture_scene_frame_state,
     _operator_result_tokens,
@@ -85,55 +86,46 @@ from ..runtime_task_target import (
 )
 
 
-def _ensure_operator_finished(result, error_code, operator_label, node_name):
-    return _ensure_operator_finished_impl(
-        result,
-        error_code,
-        operator_label,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-    )
+_ensure_operator_finished = bind_partial_export(
+    _ensure_operator_finished_impl,
+    flow_execution_error_cls=FlowExecutionError,
+)
 
 
-def _find_geometry_bake_entry_for_task(task_ref, error_context):
-    return _find_geometry_bake_entry_for_task_impl(
+_find_geometry_bake_entry_for_task = bind_partial_export(
+    _find_geometry_bake_entry_for_task_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    require_payload_object_ref=_require_payload_object_ref,
+)
+
+
+_resolve_geometry_task_effective_bake_target = bind_partial_export(
+    _resolve_geometry_task_effective_bake_target_impl,
+    find_geometry_bake_entry_for_task=lambda task_ref, error_context: _find_geometry_bake_entry_for_task(
         task_ref,
         error_context,
-        flow_execution_error_cls=FlowExecutionError,
-        require_payload_object_ref=_require_payload_object_ref,
-    )
+    ),
+)
 
 
-def _resolve_geometry_task_effective_bake_target(task_ref):
-    return _resolve_geometry_task_effective_bake_target_impl(
-        task_ref,
-        find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
-    )
+_ensure_background_geometry_task_supported = bind_partial_export(
+    _ensure_background_geometry_task_supported_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    resolve_geometry_task_effective_bake_target=lambda task_ref: _resolve_geometry_task_effective_bake_target(task_ref),
+)
 
 
-def _ensure_background_geometry_task_supported(task_ref, node_name):
-    return _ensure_background_geometry_task_supported_impl(
-        task_ref,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-        resolve_geometry_task_effective_bake_target=_resolve_geometry_task_effective_bake_target,
-    )
+_capture_geometry_bake_entry_settings = _capture_geometry_bake_entry_settings_impl
 
 
-def _capture_geometry_bake_entry_settings(bake_entry):
-    return _capture_geometry_bake_entry_settings_impl(bake_entry)
+_build_geometry_bake_release_task_ref = bind_partial_export(
+    _build_geometry_bake_release_task_ref_impl,
+    get_geometry_bake_last_bake_state=lambda task_ref: _get_geometry_bake_last_bake_state(task_ref),
+    get_geometry_bake_tracked_packed_cache_status=lambda task_ref: _get_geometry_bake_tracked_packed_cache_status(task_ref),
+)
 
 
-def _build_geometry_bake_release_task_ref(task_ref):
-    return _build_geometry_bake_release_task_ref_impl(
-        task_ref,
-        get_geometry_bake_last_bake_state=_get_geometry_bake_last_bake_state,
-        get_geometry_bake_tracked_packed_cache_status=_get_geometry_bake_tracked_packed_cache_status,
-    )
-
-
-def _apply_geometry_bake_entry_settings(bake_entry, task_ref):
-    return _apply_geometry_bake_entry_settings_impl(bake_entry, task_ref)
+_apply_geometry_bake_entry_settings = _apply_geometry_bake_entry_settings_impl
 
 
 def _apply_geometry_bake_runtime_disk_directory(bake_entry, task_ref, *, resolve_default_directory=None):
@@ -157,134 +149,112 @@ def _apply_geometry_bake_runtime_disk_directory(bake_entry, task_ref, *, resolve
     )
 
 
-def _restore_geometry_bake_entry_settings(bake_entry, state):
-    return _restore_geometry_bake_entry_settings_impl(bake_entry, state)
+_restore_geometry_bake_entry_settings = _restore_geometry_bake_entry_settings_impl
 
 
-def _resolve_geometry_task_source_node(task_ref):
-    return _resolve_geometry_task_source_node_impl(task_ref)
+_resolve_geometry_task_source_node = _resolve_geometry_task_source_node_impl
 
 
-def _read_geometry_bake_tracked_packed_cache_state(node):
-    return _read_geometry_bake_tracked_packed_cache_state_impl(
-        node,
-        gn_packed_cache_state_prop=GN_PACKED_CACHE_STATE_PROP,
-        json_module=json,
-    )
+_read_geometry_bake_tracked_packed_cache_state = bind_partial_export(
+    _read_geometry_bake_tracked_packed_cache_state_impl,
+    gn_packed_cache_state_prop=GN_PACKED_CACHE_STATE_PROP,
+    json_module=json,
+)
 
 
-def _read_geometry_bake_last_bake_state(node):
-    return _read_geometry_bake_last_bake_state_impl(
-        node,
-        gn_last_bake_state_prop=GN_LAST_BAKE_STATE_PROP,
-        json_module=json,
-    )
+_read_geometry_bake_last_bake_state = bind_partial_export(
+    _read_geometry_bake_last_bake_state_impl,
+    gn_last_bake_state_prop=GN_LAST_BAKE_STATE_PROP,
+    json_module=json,
+)
 
 
-def _write_geometry_bake_tracked_packed_cache_state(task_ref, frame_range=None):
-    return _write_geometry_bake_tracked_packed_cache_state_impl(
-        task_ref,
-        frame_range=frame_range,
-        resolve_geometry_task_source_node=_resolve_geometry_task_source_node,
-        gn_packed_cache_state_prop=GN_PACKED_CACHE_STATE_PROP,
-        json_module=json,
-    )
+_write_geometry_bake_tracked_packed_cache_state = bind_partial_export(
+    _write_geometry_bake_tracked_packed_cache_state_impl,
+    resolve_geometry_task_source_node=lambda task_ref: _resolve_geometry_task_source_node(task_ref),
+    gn_packed_cache_state_prop=GN_PACKED_CACHE_STATE_PROP,
+    json_module=json,
+)
 
 
-def _write_geometry_bake_last_bake_state(task_ref, frame_range=None):
-    return _write_geometry_bake_last_bake_state_impl(
-        task_ref,
-        frame_range=frame_range,
-        resolve_geometry_task_source_node=_resolve_geometry_task_source_node,
-        resolve_geometry_task_effective_bake_target=_resolve_geometry_task_effective_bake_target,
-        gn_last_bake_state_prop=GN_LAST_BAKE_STATE_PROP,
-        json_module=json,
-    )
+_write_geometry_bake_last_bake_state = bind_partial_export(
+    _write_geometry_bake_last_bake_state_impl,
+    resolve_geometry_task_source_node=lambda task_ref: _resolve_geometry_task_source_node(task_ref),
+    resolve_geometry_task_effective_bake_target=lambda task_ref: _resolve_geometry_task_effective_bake_target(task_ref),
+    gn_last_bake_state_prop=GN_LAST_BAKE_STATE_PROP,
+    json_module=json,
+)
 
 
-def _clear_geometry_bake_tracked_packed_cache_state(task_ref):
-    return _clear_geometry_bake_tracked_packed_cache_state_impl(
-        task_ref,
-        resolve_geometry_task_source_node=_resolve_geometry_task_source_node,
-        gn_packed_cache_state_prop=GN_PACKED_CACHE_STATE_PROP,
-    )
+_clear_geometry_bake_tracked_packed_cache_state = bind_partial_export(
+    _clear_geometry_bake_tracked_packed_cache_state_impl,
+    resolve_geometry_task_source_node=lambda task_ref: _resolve_geometry_task_source_node(task_ref),
+    gn_packed_cache_state_prop=GN_PACKED_CACHE_STATE_PROP,
+)
 
 
-def _clear_geometry_bake_last_bake_state(task_ref):
-    return _clear_geometry_bake_last_bake_state_impl(
-        task_ref,
-        resolve_geometry_task_source_node=_resolve_geometry_task_source_node,
-        gn_last_bake_state_prop=GN_LAST_BAKE_STATE_PROP,
-    )
+_clear_geometry_bake_last_bake_state = bind_partial_export(
+    _clear_geometry_bake_last_bake_state_impl,
+    resolve_geometry_task_source_node=lambda task_ref: _resolve_geometry_task_source_node(task_ref),
+    gn_last_bake_state_prop=GN_LAST_BAKE_STATE_PROP,
+)
 
 
-def _get_geometry_bake_tracked_packed_cache_status(task_ref):
-    return _get_geometry_bake_tracked_packed_cache_status_impl(
-        task_ref,
-        resolve_geometry_task_source_node=_resolve_geometry_task_source_node,
-        read_geometry_bake_tracked_packed_cache_state=_read_geometry_bake_tracked_packed_cache_state,
-    )
+_get_geometry_bake_tracked_packed_cache_status = bind_partial_export(
+    _get_geometry_bake_tracked_packed_cache_status_impl,
+    resolve_geometry_task_source_node=lambda task_ref: _resolve_geometry_task_source_node(task_ref),
+    read_geometry_bake_tracked_packed_cache_state=lambda node: _read_geometry_bake_tracked_packed_cache_state(node),
+)
 
 
-def _get_geometry_bake_last_bake_state(task_ref):
-    return _get_geometry_bake_last_bake_state_impl(
-        task_ref,
-        resolve_geometry_task_source_node=_resolve_geometry_task_source_node,
-        read_geometry_bake_last_bake_state=_read_geometry_bake_last_bake_state,
-    )
+_get_geometry_bake_last_bake_state = bind_partial_export(
+    _get_geometry_bake_last_bake_state_impl,
+    resolve_geometry_task_source_node=lambda task_ref: _resolve_geometry_task_source_node(task_ref),
+    read_geometry_bake_last_bake_state=lambda node: _read_geometry_bake_last_bake_state(node),
+)
 
 
-def _geometry_bake_entry_has_cached_data(bake_entry):
-    return _geometry_bake_entry_has_cached_data_impl(bake_entry)
+_geometry_bake_entry_has_cached_data = _geometry_bake_entry_has_cached_data_impl
 
 
-def _geometry_bake_disk_cache_root_dir(task_ref, bake_entry=None):
-    return _geometry_bake_disk_cache_root_dir_impl(
-        task_ref,
-        bake_entry=bake_entry,
-        bpy_module=bpy,
-        require_payload_object_ref=_require_payload_object_ref,
-    )
+_geometry_bake_disk_cache_root_dir = bind_partial_export(
+    _geometry_bake_disk_cache_root_dir_impl,
+    bpy_module=bpy,
+    require_payload_object_ref=_require_payload_object_ref,
+)
 
 
-def _geometry_bake_default_disk_cache_root_dir(task_ref, modifier):
-    return _geometry_bake_default_disk_cache_root_dir_impl(
-        task_ref,
-        modifier,
-        bpy_module=bpy,
-    )
+_geometry_bake_default_disk_cache_root_dir = bind_partial_export(
+    _geometry_bake_default_disk_cache_root_dir_impl,
+    bpy_module=bpy,
+)
 
 
-def _geometry_bake_default_disk_cache_root_dir_relpath(task_ref, modifier):
-    return _geometry_bake_default_disk_cache_root_dir_relpath_impl(
-        task_ref,
-        modifier,
-        bpy_module=bpy,
-    )
+_geometry_bake_default_disk_cache_root_dir_relpath = bind_partial_export(
+    _geometry_bake_default_disk_cache_root_dir_relpath_impl,
+    bpy_module=bpy,
+)
 
 
-def _iter_geometry_bake_disk_cache_candidate_roots(task_ref, bake_entry=None):
-    return _iter_geometry_bake_disk_cache_candidate_roots_impl(
+_iter_geometry_bake_disk_cache_candidate_roots = bind_partial_export(
+    _iter_geometry_bake_disk_cache_candidate_roots_impl,
+    geometry_bake_disk_cache_root_dir=lambda task_ref, bake_entry=None: _geometry_bake_disk_cache_root_dir(
         task_ref,
         bake_entry=bake_entry,
-        geometry_bake_disk_cache_root_dir=_geometry_bake_disk_cache_root_dir,
-    )
+    ),
+)
 
 
-def _geometry_bake_cached_frame_from_filename(filename):
-    return _geometry_bake_cached_frame_from_filename_impl(filename)
+_geometry_bake_cached_frame_from_filename = _geometry_bake_cached_frame_from_filename_impl
 
 
-def _geometry_bake_cached_frame_range_from_candidate_root(candidate_root):
-    return _geometry_bake_cached_frame_range_from_candidate_root_impl(candidate_root)
+_geometry_bake_cached_frame_range_from_candidate_root = _geometry_bake_cached_frame_range_from_candidate_root_impl
 
 
-def _geometry_bake_disk_cache_frame_range(task_ref, bake_entry=None):
-    return _geometry_bake_disk_cache_frame_range_impl(task_ref, bake_entry=bake_entry)
+_geometry_bake_disk_cache_frame_range = _geometry_bake_disk_cache_frame_range_impl
 
 
-def _geometry_bake_entry_cached_frame_range(bake_entry):
-    return _geometry_bake_entry_cached_frame_range_impl(bake_entry)
+_geometry_bake_entry_cached_frame_range = _geometry_bake_entry_cached_frame_range_impl
 
 
 def _geometry_bake_cache_status_from_node(node):
@@ -300,7 +270,10 @@ def _geometry_bake_cache_status_from_node(node):
         geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
         geometry_bake_entry_cached_frame_range=_geometry_bake_entry_cached_frame_range,
         get_geometry_bake_tracked_packed_cache_status=_get_geometry_bake_tracked_packed_cache_status,
-        geometry_bake_disk_cache_exists=_geometry_bake_disk_cache_exists,
+        geometry_bake_disk_cache_exists=lambda task_ref, bake_entry=None: _geometry_bake_disk_cache_exists(
+            task_ref,
+            bake_entry=bake_entry,
+        ),
     )
 
 
@@ -308,99 +281,104 @@ def _refresh_geometry_bake_cache_state_after_completion(task_ref, scene=None):
     return _refresh_geometry_bake_cache_state_after_completion_impl(
         task_ref,
         scene=scene if scene is not None else getattr(bpy.context, "scene", None),
-        find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
+        find_geometry_bake_entry_for_task=lambda current_task_ref, error_context: _find_geometry_bake_entry_for_task(
+            current_task_ref,
+            error_context,
+        ),
         geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
         geometry_bake_entry_cached_frame_range=_geometry_bake_entry_cached_frame_range,
-        resolve_geometry_task_effective_bake_target=_resolve_geometry_task_effective_bake_target,
+        resolve_geometry_task_effective_bake_target=lambda current_task_ref: _resolve_geometry_task_effective_bake_target(
+            current_task_ref
+        ),
         tag_all_node_editor_redraw=_tag_all_node_editor_redraw,
     )
 
 
-def _schedule_geometry_bake_cache_refresh(task_ref, scene=None, retries=24, interval=0.12):
-    return _schedule_geometry_bake_cache_refresh_impl(
+_schedule_geometry_bake_cache_refresh = bind_partial_export(
+    _schedule_geometry_bake_cache_refresh_impl,
+    refresh_geometry_bake_cache_state_after_completion=lambda task_ref, scene=None: _refresh_geometry_bake_cache_state_after_completion(
         task_ref,
         scene=scene,
-        retries=retries,
-        interval=interval,
-        refresh_geometry_bake_cache_state_after_completion=_refresh_geometry_bake_cache_state_after_completion,
-        find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
-        geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
-        geometry_bake_disk_cache_exists=_geometry_bake_disk_cache_exists,
-        tag_all_node_editor_redraw=_tag_all_node_editor_redraw,
-    )
-
-
-def _geometry_bake_disk_cache_exists(task_ref, bake_entry=None):
-    return _geometry_bake_disk_cache_exists_impl(
+    ),
+    find_geometry_bake_entry_for_task=lambda task_ref, error_context: _find_geometry_bake_entry_for_task(
+        task_ref,
+        error_context,
+    ),
+    geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
+    geometry_bake_disk_cache_exists=lambda task_ref, bake_entry=None: _geometry_bake_disk_cache_exists(
         task_ref,
         bake_entry=bake_entry,
-        geometry_bake_disk_cache_candidate_roots=_iter_geometry_bake_disk_cache_candidate_roots,
-    )
+    ),
+    tag_all_node_editor_redraw=_tag_all_node_editor_redraw,
+)
 
 
-def _geometry_bake_has_existing_cache(task_ref, scene, bake_entry):
-    return _geometry_bake_has_existing_cache_impl(
+_geometry_bake_disk_cache_exists = bind_partial_export(
+    _geometry_bake_disk_cache_exists_impl,
+    geometry_bake_disk_cache_candidate_roots=lambda task_ref, bake_entry=None: _iter_geometry_bake_disk_cache_candidate_roots(
         task_ref,
-        scene,
-        bake_entry,
-        geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
-        get_geometry_bake_tracked_packed_cache_status=_get_geometry_bake_tracked_packed_cache_status,
-        geometry_bake_disk_cache_exists=_geometry_bake_disk_cache_exists,
-    )
+        bake_entry=bake_entry,
+    ),
+)
 
 
-def _geometry_bake_has_existing_cache_for_current_entry(task_ref, scene, bake_entry):
-    return _geometry_bake_has_existing_cache_for_current_entry_impl(
+_geometry_bake_has_existing_cache = bind_partial_export(
+    _geometry_bake_has_existing_cache_impl,
+    geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
+    get_geometry_bake_tracked_packed_cache_status=lambda task_ref: _get_geometry_bake_tracked_packed_cache_status(task_ref),
+    geometry_bake_disk_cache_exists=lambda task_ref, bake_entry=None: _geometry_bake_disk_cache_exists(
         task_ref,
-        scene,
-        bake_entry,
-        geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
-        get_geometry_bake_tracked_packed_cache_status=_get_geometry_bake_tracked_packed_cache_status,
-        geometry_bake_disk_cache_exists=_geometry_bake_disk_cache_exists,
-    )
+        bake_entry=bake_entry,
+    ),
+)
 
 
-def _point_cache_has_existing_cache(point_cache):
-    return _point_cache_has_existing_cache_impl(
-        point_cache,
-        bpy_module=bpy,
-        os_module=os,
-        re_module=re,
-    )
-
-
-def _point_cache_frame_range(point_cache):
-    return _point_cache_frame_range_impl(
-        point_cache,
-        point_cache_has_existing_cache=_point_cache_has_existing_cache,
-    )
-
-
-def _physics_bake_cache_status_from_node(node):
-    return _physics_bake_cache_status_from_node_impl(
-        node,
-        flow_execution_error_cls=FlowExecutionError,
-        resolve_physics_task_target=_resolve_physics_task_target,
-        point_cache_frame_range=_point_cache_frame_range,
-    )
-
-
-def _physics_task_has_existing_cache(task_ref):
-    return _physics_task_has_existing_cache_impl(
+_geometry_bake_has_existing_cache_for_current_entry = bind_partial_export(
+    _geometry_bake_has_existing_cache_for_current_entry_impl,
+    geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
+    get_geometry_bake_tracked_packed_cache_status=lambda task_ref: _get_geometry_bake_tracked_packed_cache_status(task_ref),
+    geometry_bake_disk_cache_exists=lambda task_ref, bake_entry=None: _geometry_bake_disk_cache_exists(
         task_ref,
-        point_cache_has_existing_cache=_point_cache_has_existing_cache,
-    )
+        bake_entry=bake_entry,
+    ),
+)
 
 
-def _physics_bake_all_has_pending_work(task_ref):
-    return _physics_bake_all_has_pending_work_impl(
-        task_ref,
-        physics_task_has_existing_cache=_physics_task_has_existing_cache,
-    )
+_point_cache_has_existing_cache = bind_partial_export(
+    _point_cache_has_existing_cache_impl,
+    bpy_module=bpy,
+    os_module=os,
+    re_module=re,
+)
 
 
-def _task_operator_result_is_skipped(result):
-    return _task_operator_result_is_skipped_impl(result)
+_point_cache_frame_range = bind_partial_export(
+    _point_cache_frame_range_impl,
+    point_cache_has_existing_cache=_point_cache_has_existing_cache,
+)
+
+
+_physics_bake_cache_status_from_node = bind_partial_export(
+    _physics_bake_cache_status_from_node_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    resolve_physics_task_target=_resolve_physics_task_target,
+    point_cache_frame_range=_point_cache_frame_range,
+)
+
+
+_physics_task_has_existing_cache = bind_partial_export(
+    _physics_task_has_existing_cache_impl,
+    point_cache_has_existing_cache=_point_cache_has_existing_cache,
+)
+
+
+_physics_bake_all_has_pending_work = bind_partial_export(
+    _physics_bake_all_has_pending_work_impl,
+    physics_task_has_existing_cache=_physics_task_has_existing_cache,
+)
+
+
+_task_operator_result_is_skipped = _task_operator_result_is_skipped_impl
 
 
 def _apply_temporary_geometry_bake_settings(task_ref):
@@ -451,12 +429,11 @@ def _apply_temporary_geometry_bake_runtime_directory(task_ref):
     )
 
 
-def _apply_current_geometry_bake_temporary_override(task_ref):
-    return _apply_current_geometry_bake_temporary_override_impl(
-        task_ref,
-        apply_temporary_geometry_bake_settings=_apply_temporary_geometry_bake_settings,
-        apply_temporary_geometry_bake_runtime_directory=_apply_temporary_geometry_bake_runtime_directory,
-    )
+_apply_current_geometry_bake_temporary_override = bind_partial_export(
+    _apply_current_geometry_bake_temporary_override_impl,
+    apply_temporary_geometry_bake_settings=_apply_temporary_geometry_bake_settings,
+    apply_temporary_geometry_bake_runtime_directory=_apply_temporary_geometry_bake_runtime_directory,
+)
 
 
 def _apply_geometry_bake_settings_for_run(task_ref):
@@ -481,207 +458,171 @@ def _apply_geometry_bake_settings_for_run(task_ref):
     )
 
 
-def _geometry_bake_keep_overridden_settings_on_success(task_ref):
-    return _geometry_bake_keep_overridden_settings_on_success_impl(task_ref)
+_geometry_bake_keep_overridden_settings_on_success = _geometry_bake_keep_overridden_settings_on_success_impl
 
 
-def _clear_geometry_bake_recorded_cache_state(task_ref):
-    return _clear_geometry_bake_recorded_cache_state_impl(
-        task_ref,
-        clear_geometry_bake_tracked_packed_cache_state=_clear_geometry_bake_tracked_packed_cache_state,
-        clear_geometry_bake_last_bake_state=_clear_geometry_bake_last_bake_state,
-    )
+_clear_geometry_bake_recorded_cache_state = bind_partial_export(
+    _clear_geometry_bake_recorded_cache_state_impl,
+    clear_geometry_bake_tracked_packed_cache_state=lambda task_ref: _clear_geometry_bake_tracked_packed_cache_state(task_ref),
+    clear_geometry_bake_last_bake_state=lambda task_ref: _clear_geometry_bake_last_bake_state(task_ref),
+)
 
 
-def _normalize_geometry_bake_modifier_directory_for_task(task_ref, bake_entry=None):
-    return _normalize_geometry_bake_modifier_directory_for_task_impl(
-        task_ref,
-        bake_entry=bake_entry,
-        bpy_module=bpy,
-        require_payload_object_ref=_require_payload_object_ref,
-    )
+_normalize_geometry_bake_modifier_directory_for_task = bind_partial_export(
+    _normalize_geometry_bake_modifier_directory_for_task_impl,
+    bpy_module=bpy,
+    require_payload_object_ref=_require_payload_object_ref,
+)
 
 
-def _compose_bake_override(base_override, ui_context=None):
-    return _compose_bake_override_impl(base_override, ui_context=ui_context)
+_compose_bake_override = _compose_bake_override_impl
 
 
-def _call_operator_with_override(operator, override, payload=None, invoke_async=False):
-    return _call_operator_with_override_impl(
-        operator,
-        override,
-        payload=payload,
-        invoke_async=invoke_async,
-        operator_result_tokens=_operator_result_tokens,
-    )
+_call_operator_with_override = bind_partial_export(
+    _call_operator_with_override_impl,
+    operator_result_tokens=_operator_result_tokens,
+)
 
 
-def _run_geometry_bake_free_operators(override, payload):
-    return _run_geometry_bake_free_operators_impl(
-        override,
-        payload,
-        bpy_module=bpy,
-        call_operator_with_override=_call_operator_with_override,
-    )
+_run_geometry_bake_free_operators = bind_partial_export(
+    _run_geometry_bake_free_operators_impl,
+    bpy_module=bpy,
+    call_operator_with_override=_call_operator_with_override,
+)
 
 
-def _start_named_operator(operator_paths, override, payload, source_node, invoke_async=False):
-    return _start_named_operator_impl(
-        operator_paths,
-        override,
-        payload,
-        source_node,
-        invoke_async=invoke_async,
-        flow_execution_error_cls=FlowExecutionError,
-        call_operator_with_override=_call_operator_with_override,
-    )
+_start_named_operator = bind_partial_export(
+    _start_named_operator_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    call_operator_with_override=_call_operator_with_override,
+)
 
 
-def _restore_waiting_bake_cleanup(wait_state, bake_completed):
-    return _restore_waiting_bake_cleanup_impl(
-        wait_state,
-        bake_completed,
-        task_kind_geometry=TASK_KIND_GEOMETRY,
-        task_kind_physics=TASK_KIND_PHYSICS,
-        task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
-        restore_geometry_bake_entry_settings=_restore_geometry_bake_entry_settings,
-        restore_scene_frame_state=_restore_scene_frame_state,
-    )
+_restore_waiting_bake_cleanup = bind_partial_export(
+    _restore_waiting_bake_cleanup_impl,
+    task_kind_geometry=TASK_KIND_GEOMETRY,
+    task_kind_physics=TASK_KIND_PHYSICS,
+    task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
+    restore_geometry_bake_entry_settings=_restore_geometry_bake_entry_settings,
+    restore_scene_frame_state=_restore_scene_frame_state,
+)
 
 
-def _start_geometry_nodes_bake_task(task_ref, scene, ui_context=None):
-    return _start_geometry_nodes_bake_task_impl(
-        task_ref,
-        scene,
-        ui_context=ui_context,
-        bpy_module=bpy,
-        require_payload_object_ref=_require_payload_object_ref,
-        find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
-        compose_bake_override=_compose_bake_override,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        geometry_bake_has_existing_cache_for_current_entry=_geometry_bake_has_existing_cache_for_current_entry,
-        geometry_bake_has_existing_cache=_geometry_bake_has_existing_cache,
-        apply_temporary_geometry_bake_settings=_apply_temporary_geometry_bake_settings,
-        apply_current_geometry_bake_temporary_override=_apply_current_geometry_bake_temporary_override,
-        build_geometry_bake_release_task_ref=_build_geometry_bake_release_task_ref,
-        normalize_geometry_bake_modifier_directory_for_task=_normalize_geometry_bake_modifier_directory_for_task,
-        clear_geometry_bake_recorded_cache_state=_clear_geometry_bake_recorded_cache_state,
-        call_operator_with_override=_call_operator_with_override,
-        start_named_operator=_start_named_operator,
-        restore_waiting_bake_cleanup=_restore_waiting_bake_cleanup,
-        bake_job_type=BAKE_JOB_TYPE,
-        task_kind_geometry=TASK_KIND_GEOMETRY,
-    )
+_start_geometry_nodes_bake_task = bind_partial_export(
+    _start_geometry_nodes_bake_task_impl,
+    bpy_module=bpy,
+    require_payload_object_ref=_require_payload_object_ref,
+    find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
+    compose_bake_override=_compose_bake_override,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    geometry_bake_has_existing_cache_for_current_entry=_geometry_bake_has_existing_cache_for_current_entry,
+    geometry_bake_has_existing_cache=_geometry_bake_has_existing_cache,
+    apply_temporary_geometry_bake_settings=_apply_temporary_geometry_bake_settings,
+    apply_current_geometry_bake_temporary_override=_apply_current_geometry_bake_temporary_override,
+    build_geometry_bake_release_task_ref=_build_geometry_bake_release_task_ref,
+    normalize_geometry_bake_modifier_directory_for_task=_normalize_geometry_bake_modifier_directory_for_task,
+    clear_geometry_bake_recorded_cache_state=_clear_geometry_bake_recorded_cache_state,
+    call_operator_with_override=_call_operator_with_override,
+    start_named_operator=_start_named_operator,
+    restore_waiting_bake_cleanup=_restore_waiting_bake_cleanup,
+    bake_job_type=BAKE_JOB_TYPE,
+    task_kind_geometry=TASK_KIND_GEOMETRY,
+)
 
 
-def _start_physics_bake_task(task_ref, scene, ui_context=None):
-    return _start_physics_bake_task_impl(
-        task_ref,
-        scene,
-        ui_context=ui_context,
-        bpy_module=bpy,
-        flow_execution_error_cls=FlowExecutionError,
-        require_payload_object_ref=_require_payload_object_ref,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        physics_task_has_existing_cache=_physics_task_has_existing_cache,
-        compose_bake_override=_compose_bake_override,
-        start_named_operator=_start_named_operator,
-        restore_waiting_bake_cleanup=_restore_waiting_bake_cleanup,
-        bake_job_type=BAKE_JOB_TYPE,
-        task_kind_physics=TASK_KIND_PHYSICS,
-    )
+_start_physics_bake_task = bind_partial_export(
+    _start_physics_bake_task_impl,
+    bpy_module=bpy,
+    flow_execution_error_cls=FlowExecutionError,
+    require_payload_object_ref=_require_payload_object_ref,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    physics_task_has_existing_cache=_physics_task_has_existing_cache,
+    compose_bake_override=_compose_bake_override,
+    start_named_operator=_start_named_operator,
+    restore_waiting_bake_cleanup=_restore_waiting_bake_cleanup,
+    bake_job_type=BAKE_JOB_TYPE,
+    task_kind_physics=TASK_KIND_PHYSICS,
+)
 
 
-def _start_physics_bake_all_task(task_ref, scene, ui_context=None):
-    return _start_physics_bake_all_task_impl(
-        task_ref,
-        scene,
-        ui_context=ui_context,
-        bpy_module=bpy,
-        flow_execution_error_cls=FlowExecutionError,
-        require_payload_object_ref=_require_payload_object_ref,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        physics_bake_all_has_pending_work=_physics_bake_all_has_pending_work,
-        compose_bake_override=_compose_bake_override,
-        start_named_operator=_start_named_operator,
-        restore_waiting_bake_cleanup=_restore_waiting_bake_cleanup,
-        bake_job_type=BAKE_JOB_TYPE,
-        task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
-    )
+_start_physics_bake_all_task = bind_partial_export(
+    _start_physics_bake_all_task_impl,
+    bpy_module=bpy,
+    flow_execution_error_cls=FlowExecutionError,
+    require_payload_object_ref=_require_payload_object_ref,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    physics_bake_all_has_pending_work=_physics_bake_all_has_pending_work,
+    compose_bake_override=_compose_bake_override,
+    start_named_operator=_start_named_operator,
+    restore_waiting_bake_cleanup=_restore_waiting_bake_cleanup,
+    bake_job_type=BAKE_JOB_TYPE,
+    task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
+)
 
 
-def _invoke_geometry_nodes_bake_task(task_ref, scene):
-    return _invoke_geometry_nodes_bake_task_impl(
-        task_ref,
-        scene,
-        bpy_module=bpy,
-        require_payload_object_ref=_require_payload_object_ref,
-        find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        geometry_bake_has_existing_cache_for_current_entry=_geometry_bake_has_existing_cache_for_current_entry,
-        geometry_bake_has_existing_cache=_geometry_bake_has_existing_cache,
-        apply_temporary_geometry_bake_settings=_apply_temporary_geometry_bake_settings,
-        apply_current_geometry_bake_temporary_override=_apply_current_geometry_bake_temporary_override,
-        build_geometry_bake_release_task_ref=_build_geometry_bake_release_task_ref,
-        normalize_geometry_bake_modifier_directory_for_task=_normalize_geometry_bake_modifier_directory_for_task,
-        clear_geometry_bake_recorded_cache_state=_clear_geometry_bake_recorded_cache_state,
-        call_operator_with_override=_call_operator_with_override,
-        start_named_operator=_start_named_operator,
-        refresh_geometry_bake_cache_state_after_completion=_refresh_geometry_bake_cache_state_after_completion,
-        schedule_geometry_bake_cache_refresh=_schedule_geometry_bake_cache_refresh,
-        resolve_geometry_task_effective_bake_target=_resolve_geometry_task_effective_bake_target,
-        geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
-        geometry_bake_disk_cache_exists=_geometry_bake_disk_cache_exists,
-        clear_geometry_bake_tracked_packed_cache_state=_clear_geometry_bake_tracked_packed_cache_state,
-        write_geometry_bake_tracked_packed_cache_state=_write_geometry_bake_tracked_packed_cache_state,
-        write_geometry_bake_last_bake_state=_write_geometry_bake_last_bake_state,
-        ensure_operator_finished=_ensure_operator_finished,
-        restore_geometry_bake_entry_settings=_restore_geometry_bake_entry_settings,
-        restore_scene_frame_state=_restore_scene_frame_state,
-    )
+_invoke_geometry_nodes_bake_task = bind_partial_export(
+    _invoke_geometry_nodes_bake_task_impl,
+    bpy_module=bpy,
+    require_payload_object_ref=_require_payload_object_ref,
+    find_geometry_bake_entry_for_task=_find_geometry_bake_entry_for_task,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    geometry_bake_has_existing_cache_for_current_entry=_geometry_bake_has_existing_cache_for_current_entry,
+    geometry_bake_has_existing_cache=_geometry_bake_has_existing_cache,
+    apply_temporary_geometry_bake_settings=_apply_temporary_geometry_bake_settings,
+    apply_current_geometry_bake_temporary_override=_apply_current_geometry_bake_temporary_override,
+    build_geometry_bake_release_task_ref=_build_geometry_bake_release_task_ref,
+    normalize_geometry_bake_modifier_directory_for_task=_normalize_geometry_bake_modifier_directory_for_task,
+    clear_geometry_bake_recorded_cache_state=_clear_geometry_bake_recorded_cache_state,
+    call_operator_with_override=_call_operator_with_override,
+    start_named_operator=_start_named_operator,
+    refresh_geometry_bake_cache_state_after_completion=_refresh_geometry_bake_cache_state_after_completion,
+    schedule_geometry_bake_cache_refresh=_schedule_geometry_bake_cache_refresh,
+    resolve_geometry_task_effective_bake_target=_resolve_geometry_task_effective_bake_target,
+    geometry_bake_entry_has_cached_data=_geometry_bake_entry_has_cached_data,
+    geometry_bake_disk_cache_exists=_geometry_bake_disk_cache_exists,
+    clear_geometry_bake_tracked_packed_cache_state=_clear_geometry_bake_tracked_packed_cache_state,
+    write_geometry_bake_tracked_packed_cache_state=_write_geometry_bake_tracked_packed_cache_state,
+    write_geometry_bake_last_bake_state=_write_geometry_bake_last_bake_state,
+    ensure_operator_finished=_ensure_operator_finished,
+    restore_geometry_bake_entry_settings=_restore_geometry_bake_entry_settings,
+    restore_scene_frame_state=_restore_scene_frame_state,
+)
 
 
-def _invoke_physics_bake_task(task_ref, scene):
-    return _invoke_physics_bake_task_impl(
-        task_ref,
-        scene,
-        bpy_module=bpy,
-        flow_execution_error_cls=FlowExecutionError,
-        require_payload_object_ref=_require_payload_object_ref,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        physics_task_has_existing_cache=_physics_task_has_existing_cache,
-        start_named_operator=_start_named_operator,
-        ensure_operator_finished=_ensure_operator_finished,
-        restore_scene_frame_state=_restore_scene_frame_state,
-    )
+_invoke_physics_bake_task = bind_partial_export(
+    _invoke_physics_bake_task_impl,
+    bpy_module=bpy,
+    flow_execution_error_cls=FlowExecutionError,
+    require_payload_object_ref=_require_payload_object_ref,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    physics_task_has_existing_cache=_physics_task_has_existing_cache,
+    start_named_operator=_start_named_operator,
+    ensure_operator_finished=_ensure_operator_finished,
+    restore_scene_frame_state=_restore_scene_frame_state,
+)
 
 
-def _invoke_physics_bake_all_task(task_ref, scene):
-    return _invoke_physics_bake_all_task_impl(
-        task_ref,
-        scene,
-        bpy_module=bpy,
-        flow_execution_error_cls=FlowExecutionError,
-        require_payload_object_ref=_require_payload_object_ref,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        physics_bake_all_has_pending_work=_physics_bake_all_has_pending_work,
-        start_named_operator=_start_named_operator,
-        ensure_operator_finished=_ensure_operator_finished,
-        restore_scene_frame_state=_restore_scene_frame_state,
-    )
+_invoke_physics_bake_all_task = bind_partial_export(
+    _invoke_physics_bake_all_task_impl,
+    bpy_module=bpy,
+    flow_execution_error_cls=FlowExecutionError,
+    require_payload_object_ref=_require_payload_object_ref,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    physics_bake_all_has_pending_work=_physics_bake_all_has_pending_work,
+    start_named_operator=_start_named_operator,
+    ensure_operator_finished=_ensure_operator_finished,
+    restore_scene_frame_state=_restore_scene_frame_state,
+)
 
 
-def _invoke_render_task(task_ref, fallback_scene, node_name):
-    return _invoke_render_task_impl(
-        task_ref,
-        fallback_scene,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-        capture_scene_frame_state=_capture_scene_frame_state,
-        start_named_operator=_start_named_operator,
-        ensure_operator_finished=_ensure_operator_finished,
-        restore_scene_frame_state=_restore_scene_frame_state,
-    )
+_invoke_render_task = bind_partial_export(
+    _invoke_render_task_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    capture_scene_frame_state=_capture_scene_frame_state,
+    start_named_operator=_start_named_operator,
+    ensure_operator_finished=_ensure_operator_finished,
+    restore_scene_frame_state=_restore_scene_frame_state,
+)
 
 
 __all__ = [

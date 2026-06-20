@@ -1,13 +1,14 @@
-import importlib
+from ..runtime_core.module_loading import bind_package_api_exports, load_local_submodules
 
-_package_module = importlib.import_module(__package__)
-for _name in getattr(_package_module, "__all__", ()):
-    globals()[_name] = getattr(_package_module, _name)
+_package_exports = bind_package_api_exports(
+    globals(),
+    __package__,
+    name_filter=lambda name: name not in {"importlib", "values"},
+)
+load_local_submodules(
+    globals(),
+    __package__,
+    (("values", "values"),),
+)
 
-values = importlib.import_module(f"{__package__}.values")
-
-__all__ = ["values"] + [
-    _name
-    for _name in globals()
-    if not _name.startswith("__") and _name not in {"importlib", "_package_module", "values"}
-]
+__all__ = ["values", *_package_exports]

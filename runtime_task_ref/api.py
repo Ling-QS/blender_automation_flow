@@ -14,6 +14,7 @@ from ..runtime_core.constants import (
     TASK_KIND_PHYSICS_BAKE_ALL,
     TASK_KIND_RENDER,
 )
+from ..runtime_core.module_loading import bind_partial_export
 from ..runtime_flow.helpers import _find_single_from_input_socket, _first_output_node
 from ..runtime_property.api import (
     _iter_property_package_entries,
@@ -70,149 +71,104 @@ def _make_issue(code, message, node_name, level="ERROR"):
     }
 
 
-def _ensure_object_persistent_uuid(obj):
-    return _ensure_object_persistent_uuid_impl(obj, OBJECT_PERSISTENT_UUID_PROP)
+_ensure_object_persistent_uuid = bind_partial_export(
+    _ensure_object_persistent_uuid_impl,
+    object_persistent_uuid_prop=OBJECT_PERSISTENT_UUID_PROP,
+)
 
 
-def _obj_item(obj):
-    return _obj_item_impl(obj, _ensure_object_persistent_uuid)
+_obj_item = bind_partial_export(
+    _obj_item_impl,
+    ensure_object_persistent_uuid=_ensure_object_persistent_uuid,
+)
 
 
-def _stored_property_package_key_for_tree_node(tree_name, node_name):
-    return _stored_property_package_key_for_tree_node_impl(
-        tree_name,
-        node_name,
-        STORED_PROPERTY_PACKAGE_PROP_PREFIX,
-    )
+_stored_property_package_key_for_tree_node = bind_partial_export(
+    _stored_property_package_key_for_tree_node_impl,
+    stored_property_package_prop_prefix=STORED_PROPERTY_PACKAGE_PROP_PREFIX,
+)
 
 
-def _stored_property_package_key_for_node(node):
-    return _stored_property_package_key_for_node_impl(
-        node,
-        STORED_PROPERTY_PACKAGE_PROP_PREFIX,
-    )
+_stored_property_package_key_for_node = bind_partial_export(
+    _stored_property_package_key_for_node_impl,
+    stored_property_package_prop_prefix=STORED_PROPERTY_PACKAGE_PROP_PREFIX,
+)
 
 
-def _normalize_object_item_reference(item, object_resolver=None):
-    return _normalize_object_item_reference_impl(
-        item,
-        object_resolver=object_resolver,
-        object_reference_identity=_object_reference_identity,
-    )
+_normalize_object_item_reference = bind_partial_export(
+    _normalize_object_item_reference_impl,
+    object_reference_identity=_object_reference_identity,
+)
 
 
-def _dedup_obj_items(items, sort_mode, object_resolver=None):
-    return _dedup_obj_items_impl(
-        items,
-        sort_mode,
-        object_resolver=object_resolver,
-        normalize_object_item_reference=_normalize_object_item_reference,
-    )
+_dedup_obj_items = bind_partial_export(
+    _dedup_obj_items_impl,
+    normalize_object_item_reference=_normalize_object_item_reference,
+)
 
 
-def _find_object_by_item(item):
-    return _find_object_by_item_impl(item, OBJECT_PERSISTENT_UUID_PROP)
+_find_object_by_item = bind_partial_export(
+    _find_object_by_item_impl,
+    object_persistent_uuid_prop=OBJECT_PERSISTENT_UUID_PROP,
+)
 
 
-def _find_object_by_name(name):
-    return _find_object_by_name_impl(name)
+_find_object_by_name = _find_object_by_name_impl
 
 
-def _object_list_from_task_ref(
-    task_ref,
-    sort_mode="NAME_ASC",
-    scene=None,
-):
-    return _object_list_from_task_ref_impl(
+_object_list_from_task_ref = bind_partial_export(
+    _object_list_from_task_ref_impl,
+    rehydrate_task_ref_object_references=lambda task_ref, object_resolver=None, scene=None: _rehydrate_task_ref_object_references(
         task_ref,
-        sort_mode=sort_mode,
+        object_resolver=object_resolver,
         scene=scene,
-        rehydrate_task_ref_object_references=_rehydrate_task_ref_object_references,
-        rehydrate_property_package_bake_predicted_items=_rehydrate_property_package_bake_predicted_items,
-        copy_runtime_state_value=_copy_runtime_state_value,
-        dedup_obj_items=_dedup_obj_items,
-        obj_item=_obj_item,
-        ensure_object_persistent_uuid=_ensure_object_persistent_uuid,
-        task_kind_geometry=TASK_KIND_GEOMETRY,
-        task_kind_render=TASK_KIND_RENDER,
-        task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
-        task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
-    )
-
-
-def _frame_range_from_task_ref(task_ref, scene):
-    return _frame_range_from_task_ref_impl(
+    ),
+    rehydrate_property_package_bake_predicted_items=lambda task_ref, scene: _rehydrate_property_package_bake_predicted_items(
         task_ref,
         scene,
-        task_kind_render=TASK_KIND_RENDER,
-        task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
-        task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
-        task_kind_geometry=TASK_KIND_GEOMETRY,
-    )
+    ),
+    copy_runtime_state_value=_copy_runtime_state_value,
+    dedup_obj_items=_dedup_obj_items,
+    obj_item=_obj_item,
+    ensure_object_persistent_uuid=_ensure_object_persistent_uuid,
+    task_kind_geometry=TASK_KIND_GEOMETRY,
+    task_kind_render=TASK_KIND_RENDER,
+    task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
+    task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
+)
 
 
-def _make_property_package_bake_task_ref_payload(
-    node,
-    owner_tree_name,
-    start_tree_name,
-    start_node_name,
-    frame_start,
-    frame_end,
-    bake_asset_id,
-    action_name,
-    predicted_targets,
-    preview_degraded=False,
-    record_tree_name="",
-    record_node_name="",
-    record_group_path=None,
-    ref_role="TARGET",
-):
-    return _make_property_package_bake_task_ref_payload_impl(
-        node,
-        owner_tree_name,
-        start_tree_name,
-        start_node_name,
-        frame_start,
-        frame_end,
-        bake_asset_id,
-        action_name,
-        predicted_targets,
-        preview_degraded=preview_degraded,
-        record_tree_name=record_tree_name,
-        record_node_name=record_node_name,
-        record_group_path=record_group_path,
-        ref_role=ref_role,
-        task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
-        dedup_obj_items=_dedup_obj_items,
-    )
+_frame_range_from_task_ref = bind_partial_export(
+    _frame_range_from_task_ref_impl,
+    task_kind_render=TASK_KIND_RENDER,
+    task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
+    task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
+    task_kind_geometry=TASK_KIND_GEOMETRY,
+)
 
 
-def _build_property_package_bake_task_ref_fallback(runner, node):
-    return _build_property_package_bake_task_ref_fallback_impl(
-        runner,
-        node,
-        flow_execution_error_cls=FlowExecutionError,
-        make_property_package_bake_task_ref_payload=_make_property_package_bake_task_ref_payload,
-    )
+_make_property_package_bake_task_ref_payload = bind_partial_export(
+    _make_property_package_bake_task_ref_payload_impl,
+    task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
+    dedup_obj_items=_dedup_obj_items,
+)
 
 
-def _collect_predicted_items_from_property_package(
-    property_package,
-    owner_node_name,
-    predicted_by_id,
-    predicted_component_paths,
-):
-    return _collect_predicted_items_from_property_package_impl(
-        property_package,
-        owner_node_name,
-        predicted_by_id,
-        predicted_component_paths,
-        iter_property_package_entries=_iter_property_package_entries,
-        property_package_role_snapshot=PROPERTY_PACKAGE_ROLE_SNAPSHOT,
-        property_package_role_target=PROPERTY_PACKAGE_ROLE_TARGET,
-        property_package_scope_modifier=PROPERTY_PACKAGE_SCOPE_MODIFIER,
-        property_package_scope_object=PROPERTY_PACKAGE_SCOPE_OBJECT,
-    )
+_build_property_package_bake_task_ref_fallback = bind_partial_export(
+    _build_property_package_bake_task_ref_fallback_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    make_property_package_bake_task_ref_payload=_make_property_package_bake_task_ref_payload,
+)
+
+
+_collect_predicted_items_from_property_package = bind_partial_export(
+    _collect_predicted_items_from_property_package_impl,
+    iter_property_package_entries=_iter_property_package_entries,
+    property_package_role_snapshot=PROPERTY_PACKAGE_ROLE_SNAPSHOT,
+    property_package_role_target=PROPERTY_PACKAGE_ROLE_TARGET,
+    property_package_scope_modifier=PROPERTY_PACKAGE_SCOPE_MODIFIER,
+    property_package_scope_object=PROPERTY_PACKAGE_SCOPE_OBJECT,
+)
 
 
 def _manual_predict_property_package_bake_targets(
@@ -254,116 +210,88 @@ def _predict_property_package_bake_targets_resilient(
     )
 
 
-def _rehydrate_property_package_bake_predicted_items(task_ref, scene):
-    return _rehydrate_property_package_bake_predicted_items_impl(
-        task_ref,
-        scene,
-        predict_property_package_bake_targets_resilient=_predict_property_package_bake_targets_resilient,
-    )
+_rehydrate_property_package_bake_predicted_items = bind_partial_export(
+    _rehydrate_property_package_bake_predicted_items_impl,
+    predict_property_package_bake_targets_resilient=_predict_property_package_bake_targets_resilient,
+)
 
 
-def _rehydrate_task_ref_object_references(
-    task_ref,
-    object_resolver=None,
-    scene=None,
-):
-    return _rehydrate_task_ref_object_references_impl(
-        task_ref,
-        task_kind_geometry=TASK_KIND_GEOMETRY,
-        task_kind_physics=TASK_KIND_PHYSICS,
-        task_kind_render=TASK_KIND_RENDER,
-        task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
-        task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
-        copy_task_ref_payload=_copy_task_ref_payload,
-        copy_runtime_state_value=_copy_runtime_state_value,
-        ensure_object_persistent_uuid=_ensure_object_persistent_uuid,
-        find_object_by_item=_find_object_by_item,
-        dedup_obj_items=_dedup_obj_items,
-        scene=scene,
-        object_resolver=object_resolver,
-    )
+_rehydrate_task_ref_object_references = bind_partial_export(
+    _rehydrate_task_ref_object_references_impl,
+    task_kind_geometry=TASK_KIND_GEOMETRY,
+    task_kind_physics=TASK_KIND_PHYSICS,
+    task_kind_render=TASK_KIND_RENDER,
+    task_kind_property_package_bake=TASK_KIND_PROPERTY_PACKAGE_BAKE,
+    task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
+    copy_task_ref_payload=_copy_task_ref_payload,
+    copy_runtime_state_value=_copy_runtime_state_value,
+    ensure_object_persistent_uuid=_ensure_object_persistent_uuid,
+    find_object_by_item=_find_object_by_item,
+    dedup_obj_items=_dedup_obj_items,
+)
 
 
-def _validate_task_ref_object_targets(task_ref, node_name):
-    return _validate_task_ref_object_targets_impl(
-        task_ref,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-        task_kind_geometry=TASK_KIND_GEOMETRY,
-        task_kind_physics=TASK_KIND_PHYSICS,
-        task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
-    )
+_validate_task_ref_object_targets = bind_partial_export(
+    _validate_task_ref_object_targets_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    task_kind_geometry=TASK_KIND_GEOMETRY,
+    task_kind_physics=TASK_KIND_PHYSICS,
+    task_kind_physics_bake_all=TASK_KIND_PHYSICS_BAKE_ALL,
+)
 
 
-def _split_bake_task_path(task_path, node_name):
-    return _split_bake_task_path_impl(
-        task_path,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-    )
+_split_bake_task_path = bind_partial_export(
+    _split_bake_task_path_impl,
+    flow_execution_error_cls=FlowExecutionError,
+)
 
 
-def _resolve_bake_target(task_path, node_name):
-    return _resolve_bake_target_impl(
-        task_path,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-        split_bake_task_path=_split_bake_task_path,
-        resolve_bake_entry=_resolve_bake_entry,
-    )
+_resolve_bake_target = bind_partial_export(
+    _resolve_bake_target_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    split_bake_task_path=_split_bake_task_path,
+    resolve_bake_entry=_resolve_bake_entry,
+)
 
 
-def _split_physics_task_path(task_path, node_name):
-    return _split_physics_task_path_impl(
-        task_path,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-    )
+_split_physics_task_path = bind_partial_export(
+    _split_physics_task_path_impl,
+    flow_execution_error_cls=FlowExecutionError,
+)
 
 
-def _resolve_physics_task_target(task_path, node_name):
-    return _resolve_physics_task_target_impl(
-        task_path,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-        split_physics_task_path=_split_physics_task_path,
-        physics_supported_modifier_types=PHYSICS_SUPPORTED_MODIFIER_TYPES,
-    )
+_resolve_physics_task_target = bind_partial_export(
+    _resolve_physics_task_target_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    split_physics_task_path=_split_physics_task_path,
+    physics_supported_modifier_types=PHYSICS_SUPPORTED_MODIFIER_TYPES,
+)
 
 
-def _resolve_physics_batch_task_target(task_path, node_name):
-    return _resolve_physics_batch_task_target_impl(
-        task_path,
-        node_name,
-        flow_execution_error_cls=FlowExecutionError,
-        resolve_physics_task_target=_resolve_physics_task_target,
-        physics_batch_supported_modifier_types=PHYSICS_BATCH_SUPPORTED_MODIFIER_TYPES,
-    )
+_resolve_physics_batch_task_target = bind_partial_export(
+    _resolve_physics_batch_task_target_impl,
+    flow_execution_error_cls=FlowExecutionError,
+    resolve_physics_task_target=_resolve_physics_task_target,
+    physics_batch_supported_modifier_types=PHYSICS_BATCH_SUPPORTED_MODIFIER_TYPES,
+)
 
 
-def _require_payload_object_ref(payload, node_name, object_name_key="object_name"):
-    return _require_payload_object_ref_impl(
-        payload,
-        node_name,
-        object_name_key=object_name_key,
-        flow_execution_error_cls=FlowExecutionError,
-    )
+_require_payload_object_ref = bind_partial_export(
+    _require_payload_object_ref_impl,
+    flow_execution_error_cls=FlowExecutionError,
+)
 
 
-def _precheck_failure_message(issues):
-    return _precheck_failure_message_impl(issues)
+_precheck_failure_message = _precheck_failure_message_impl
 
 
-def _invalid_task_ref_issue(task_ref):
-    return _invalid_task_ref_issue_impl(task_ref)
+_invalid_task_ref_issue = _invalid_task_ref_issue_impl
 
 
-def _raise_if_invalid_task_ref(task_ref, fallback_node_name):
-    return _raise_if_invalid_task_ref_impl(
-        task_ref,
-        fallback_node_name,
-        flow_execution_error_cls=FlowExecutionError,
-    )
+_raise_if_invalid_task_ref = bind_partial_export(
+    _raise_if_invalid_task_ref_impl,
+    flow_execution_error_cls=FlowExecutionError,
+)
 
 
 __all__ = [

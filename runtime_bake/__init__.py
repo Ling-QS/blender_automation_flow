@@ -1,15 +1,15 @@
 import importlib
 
+from ..runtime_core.module_loading import bind_module_exports
+
 
 api = importlib.import_module(f"{__name__}.api")
-
-for _name in getattr(api, "__all__", ()):
-    globals()[_name] = getattr(api, _name)
+_api_exports = bind_module_exports(globals(), api)
 
 __all__ = sorted(
-    _name
-    for _name in globals()
-    if _name.startswith("_") and not _name.startswith("__")
+    name
+    for name in _api_exports
+    if name.startswith("_") and not name.startswith("__")
 )
 
 

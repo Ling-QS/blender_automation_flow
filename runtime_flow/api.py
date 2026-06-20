@@ -1,13 +1,10 @@
-import importlib
+from ..runtime_core.module_loading import bind_package_api_exports, load_local_submodules
 
-_package_module = importlib.import_module(__package__)
-for _name in getattr(_package_module, "__all__", ()):
-    globals()[_name] = getattr(_package_module, _name)
+_package_exports = bind_package_api_exports(globals(), __package__)
+load_local_submodules(
+    globals(),
+    __package__,
+    (("helpers", "helpers"),),
+)
 
-helpers = importlib.import_module(f"{__package__}.helpers")
-
-__all__ = [
-    name
-    for name in globals()
-    if (name.startswith("_") and not name.startswith("__")) or name == "helpers"
-]
+__all__ = list(_package_exports) + ["helpers"]

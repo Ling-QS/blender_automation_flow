@@ -1,6 +1,6 @@
 import math
 import time
-from ctypes import POINTER, Structure, c_char, c_float, c_short, c_void_p
+from ctypes import POINTER, Structure, c_char, c_float
 
 import bpy
 import blf
@@ -54,6 +54,10 @@ _FLOW_STATUS_OVERLAY_HANDLER = None
 _STORE_CHIP_FONT_ID = 0
 _FLOW_TOGGLE_LINK_COLOR = (0.02, 0.02, 0.02, 0.75)
 _FLOW_TOGGLE_SOCKET_RUNTIME_OFFSET = 456 if bpy.app.version >= (5, 1, 0) else 520
+# Blender 5.2 added an identifier_ustr field ahead of bNodeSocketRuntime.location.
+# Keep reading the exact runtime location, but jump to the correct byte offset for
+# each supported layout instead of mirroring every preceding C++ field.
+_FLOW_SOCKET_RUNTIME_LOCATION_OFFSET = 32 if bpy.app.version >= (5, 2, 0) else 24
 _FLOW_SOCKET_MARKER_FILL_COLOR = (0.10, 0.42, 0.98, 1.00)
 _FLOW_SOCKET_MARKER_OUTLINE_COLOR = (0.08, 0.10, 0.16, 0.92)
 _FLOW_SOCKET_LINK_UNDERLAY_COLOR = (0.34, 0.74, 1.00, 0.60)
@@ -703,10 +707,7 @@ def _draw_flow_socket_marker(center_x, center_y, scale):
 
 class _BNodeSocketRuntime(Structure):
     _fields_ = [
-        ("declaration", c_void_p),
-        ("changed_flag", c_void_p),
-        ("total_inputs", c_short),
-        ("pad", c_char * 6),
+        ("pad", c_char * _FLOW_SOCKET_RUNTIME_LOCATION_OFFSET),
         ("location", c_float * 2),
     ]
 
@@ -804,6 +805,16 @@ def _is_flow_toggle_trigger_link(link):
         return False
     if getattr(to_node, "bl_idname", "") != "AFNodeFlowToggle":
         return False
+    try:
+        flow_toggle_inputs = getattr(to_node, "inputs", None)
+        first_input = flow_toggle_inputs[0] if flow_toggle_inputs and len(flow_toggle_inputs) > 0 else None
+    except Exception:
+        first_input = None
+    if first_input is not None and to_socket == first_input and is_flow_socket(to_socket):
+        return True
+    socket_identifier = str(getattr(to_socket, "identifier", "") or "")
+    if socket_identifier == "Trigger":
+        return True
     return str(getattr(to_socket, "name", "") or "") == "Trigger"
 
 

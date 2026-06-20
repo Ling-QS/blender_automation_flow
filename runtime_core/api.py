@@ -1,17 +1,21 @@
-import importlib
+from .module_loading import bind_package_api_exports, load_local_submodules
 
-_package_module = importlib.import_module(__package__)
-for _name in getattr(_package_module, "__all__", ()):
-    globals()[_name] = getattr(_package_module, _name)
-
-constants = importlib.import_module(f"{__package__}.constants")
-registration = importlib.import_module(f"{__package__}.registration")
+_package_exports = bind_package_api_exports(
+    globals(),
+    __package__,
+    name_filter=lambda name: name not in {"importlib", "constants", "registration"},
+)
+load_local_submodules(
+    globals(),
+    __package__,
+    (
+        ("constants", "constants"),
+        ("registration", "registration"),
+    ),
+)
 
 __all__ = [
     "constants",
     "registration",
-] + [
-    _name
-    for _name in globals()
-    if not _name.startswith("__") and _name not in {"importlib", "_package_module", "constants", "registration"}
 ]
+__all__.extend(_package_exports)
