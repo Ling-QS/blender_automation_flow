@@ -16,16 +16,14 @@ class RuntimeNodeExecutionMixin:
             return self._execute_flow_repeat_end(node)
         if node_type == "AFNodeFlowToggle":
             return self._execute_flow_toggle(node)
+        if node_type == "AFNodeTaskStatusOverride":
+            return self._execute_task_status_override(node)
         if node_type == "AFNodeSubflowJoin":
             return self._execute_flow_subflow_join(node)
         if node_type == "AFNodeBranchStart":
             return self._execute_flow_branch_start(node)
         if node_type == "AFNodeBranchEnd":
-            status_value = str(self._input_string(node, "Status", "") or "").strip().upper()
-            if status_value:
-                self._set_output(node, "status", status_value)
-                self._set_output(node, "report", {"status": status_value})
-            return FLOW_OK, status_value or None
+            return FLOW_OK, None
 
         if getattr(node, "mute", False):
             if "status" in {key for output in node.outputs for key in self._socket_output_keys(output)}:

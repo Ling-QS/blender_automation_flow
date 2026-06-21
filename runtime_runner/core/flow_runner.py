@@ -212,6 +212,7 @@ class FlowRunner(
         self.run_id = str(uuid.uuid4())
         self.status = STATUS_IDLE
         self.nodes_in_order = []
+        self.node_group_paths_in_order = []
         self.cursor = 0
         self.vars = {}
         self.last_snapshot_package = None
@@ -311,11 +312,12 @@ class FlowRunner(
                 return self._flow_finished(STATUS_SUCCESS, "RUN_SUCCESS")
 
             node = self.nodes_in_order[self.cursor]
+            active_group_path = self._flow_group_path_at(self.cursor)
             is_task_plan_runner = node.bl_idname == "AFNodeRunTaskPlan"
             waiting_node_key = (self.cursor, self._node_identity(node)) if not is_task_plan_runner else None
             should_log_start = not is_task_plan_runner and self._active_waiting_node_key != waiting_node_key
             if not is_task_plan_runner:
-                self.current_group_path = []
+                self.current_group_path = list(active_group_path)
                 self._set_current_node(node)
                 if should_log_start:
                     self.log("INFO", "NODE_EXEC_STARTED", node.name)
@@ -354,7 +356,7 @@ class FlowRunner(
 
             control_payload = payload if isinstance(payload, dict) and payload.get("__af_runtime_control__") else None
             if not is_task_plan_runner:
-                self._record_auto_follow_tick_node(node)
+                self._record_auto_follow_tick_node(node, group_path=active_group_path)
             if result == FLOW_WAIT:
                 if not is_task_plan_runner:
                     if should_log_start:
@@ -376,7 +378,11 @@ class FlowRunner(
                 else:
                     self.log("INFO", "NODE_EXEC_DONE", node.name)
                 self._mark_node_finished(node, count_step=bool(control_payload.get("count_step", True)) if control_payload is not None else True)
-            self._execute_attached_flow_triggers(node)
+            self._execute_post_node_flow_triggers(
+                node,
+                control_payload=control_payload,
+                group_path=active_group_path,
+            )
             if control_payload is not None and "cursor_override" in control_payload:
                 self.cursor = int(control_payload["cursor_override"])
             else:

@@ -380,22 +380,34 @@ class RuntimeTaskPlanMixin:
         group_path = list(parent_group_path or [])
         group_path.append(self._make_step_ref(group_node))
 
-        group_outputs = self._find_task_group_nodes(group_tree, "NodeGroupOutput")
-        group_inputs = self._find_task_group_nodes(group_tree, "NodeGroupInput")
-        if len(group_outputs) == 1 and len(group_inputs) == 1:
-            group_output = group_outputs[0]
-            flow_socket = self._find_single_group_flow_socket(group_output, "inputs")
-            if flow_socket is not None:
-                try:
-                    return self._compile_task_segment(group_output, flow_socket.name, {"NodeGroupInput"}, group_path)
-                except FlowExecutionError as exc:
-                    _enrich_flow_error_context(
-                        exc,
-                        group_output,
-                        getattr(getattr(group_output, "id_data", None), "name", self.node_tree.name),
-                        group_path,
-                    )
-                    pass
+        flow_group_outputs = self._find_group_flow_socket_nodes(group_tree, "NodeGroupOutput", "inputs")
+        linked_flow_group_outputs = [
+            (node, socket)
+            for node, socket in flow_group_outputs
+            if bool(getattr(socket, "links", None))
+        ]
+        if linked_flow_group_outputs:
+            flow_group_outputs = linked_flow_group_outputs
+        flow_group_inputs = self._find_group_flow_socket_nodes(group_tree, "NodeGroupInput", "outputs")
+        linked_flow_group_inputs = [
+            (node, socket)
+            for node, socket in flow_group_inputs
+            if bool(getattr(socket, "links", None))
+        ]
+        if linked_flow_group_inputs:
+            flow_group_inputs = linked_flow_group_inputs
+        if len(flow_group_outputs) == 1 and len(flow_group_inputs) == 1:
+            group_output, flow_socket = flow_group_outputs[0]
+            try:
+                return self._compile_task_segment(group_output, flow_socket.name, {"NodeGroupInput"}, group_path)
+            except FlowExecutionError as exc:
+                _enrich_flow_error_context(
+                    exc,
+                    group_output,
+                    getattr(getattr(group_output, "id_data", None), "name", self.node_tree.name),
+                    group_path,
+                )
+                pass
 
         task_outputs = self._find_task_group_nodes(group_tree, "AFNodeTaskOutput")
         task_starts = self._find_task_group_nodes(group_tree, "AFNodeTaskStart")
@@ -448,7 +460,11 @@ class RuntimeTaskPlanMixin:
                 group_path,
             )
         try:
-            subflow_plans, subflow_step_count = self._compile_subflow_metadata(step_entries, output_node.name)
+            subflow_plans, subflow_step_count = self._compile_subflow_metadata(
+                step_entries,
+                output_node.name,
+                entry_cost_fn=self._task_plan_step_cost,
+            )
         except FlowExecutionError as exc:
             raise _enrich_flow_error_context(
                 exc,
@@ -551,7 +567,7 @@ class RuntimeTaskPlanMixin:
                 "status": "PENDING",
                 "step_started": False,
                 "repeat_states": {},
-                "branch_override_status": "",
+                "runtime_status_override": "",
                 "from_node": from_node,
                 "from_socket": from_socket,
                 "enabled_index": 0,
@@ -568,11 +584,11 @@ class RuntimeTaskPlanMixin:
                     step_refs = task_plan.get("step_refs")
                     if not step_refs:
                         step_refs = [{"tree_name": self.node_tree.name, "node_name": step_name} for step_name in task_plan.get("step_names", [])]
-                    entry["step_refs"] = list(step_refs)
+                    entry["step_refs"] = self._normalize_step_refs(step_refs)
                     entry["step_count"] = int(task_plan.get("step_count", len(step_refs)))
-                    entry["repeat_pairs"] = dict(task_plan.get("repeat_pairs", {}))
-                    entry["subflow_plans"] = dict(task_plan.get("subflow_plans", {}))
-                    entry["branch_plans"] = dict(task_plan.get("branch_plans", {}))
+                    entry["repeat_pairs"] = self._normalize_repeat_pairs(task_plan.get("repeat_pairs", {}))
+                    entry["subflow_plans"] = self._normalize_indexed_local_plans(task_plan.get("subflow_plans", {}))
+                    entry["branch_plans"] = self._normalize_indexed_local_plans(task_plan.get("branch_plans", {}))
             entries.append(entry)
 
         for entry in entries:
@@ -588,6 +604,29 @@ class RuntimeTaskPlanMixin:
         status_text = str(status_value or "").strip().upper()
         return status_text
 
+    def _active_task_plan_entry(self):
+        state = self.current_task_plan
+        if not isinstance(state, dict):
+            return None
+        entries = list(state.get("entries", []) or [])
+        if not entries:
+            return None
+        try:
+            active_index = int(state.get("active_entry_index", state.get("cursor", 0)) or 0)
+        except Exception:
+            active_index = 0
+        if active_index < 0 or active_index >= len(entries):
+            return None
+        entry = entries[active_index]
+        return entry if isinstance(entry, dict) else None
+
+    def _write_task_plan_runtime_status_override(self, status_value):
+        entry = self._active_task_plan_entry()
+        if not isinstance(entry, dict):
+            return False
+        entry["runtime_status_override"] = self._normalize_task_plan_final_status(status_value)
+        return True
+
     def _classify_task_plan_final_status(self, status_value):
         normalized = self._normalize_task_plan_final_status(status_value)
         if normalized in {"FAILED", "ERROR", "CANCELLED"}:
@@ -597,9 +636,9 @@ class RuntimeTaskPlanMixin:
         return "DONE"
 
     def _resolve_task_plan_status_override(self, run_node, entry):
-        branch_override_status = self._normalize_task_plan_final_status(entry.get("branch_override_status", ""))
-        if branch_override_status:
-            return branch_override_status
+        runtime_status_override = self._normalize_task_plan_final_status(entry.get("runtime_status_override", ""))
+        if runtime_status_override:
+            return runtime_status_override
         task_plan = entry.get("task_plan")
         if not isinstance(task_plan, dict):
             return ""
@@ -1385,7 +1424,7 @@ class RuntimeTaskPlanMixin:
         previous_flow_subflow_plans = self.flow_subflow_plans
         previous_cursor = int(self.cursor)
         self.current_group_path = list(step_ref.get("group_path", []))
-        self.flow_subflow_plans = dict(entry.get("subflow_plans", {}))
+        self.flow_subflow_plans = self._normalize_indexed_local_plans(entry.get("subflow_plans", {}))
         self.cursor = int(entry.get("cursor", 0))
         try:
             result, payload = self._execute_flow_subflow_join(step_node)
@@ -1413,7 +1452,7 @@ class RuntimeTaskPlanMixin:
         self.current_group_path = list(step_ref.get("group_path", []))
         entry_failure = entry.get("branch_failure")
         self.pending_branch_failure = copy.deepcopy(entry_failure) if isinstance(entry_failure, dict) else None
-        self.flow_branch_plans = dict(entry.get("branch_plans", {}))
+        self.flow_branch_plans = self._normalize_indexed_local_plans(entry.get("branch_plans", {}))
         self.cursor = int(entry.get("cursor", 0))
         try:
             result, payload = self._execute_flow_branch_start(step_node)
@@ -1440,9 +1479,6 @@ class RuntimeTaskPlanMixin:
             wrapped_payload["log_payload"] = log_payload
         if branch_triggered:
             wrapped_payload["task_plan_cursor_override"] = len(entry.get("step_refs", []))
-        branch_status_override = self._normalize_task_plan_final_status(control_payload.get("branch_status_override", ""))
-        if branch_status_override:
-            wrapped_payload["branch_status_override"] = branch_status_override
         return FLOW_OK, wrapped_payload
 
     def _execute_task_plan(self, run_node):
@@ -1605,14 +1641,14 @@ class RuntimeTaskPlanMixin:
                         getattr(getattr(step_node, "id_data", None), "name", self.node_tree.name),
                     )
                 self._mark_node_finished(step_node, count_step=bool(control_payload.get("count_step", True)) if control_payload is not None else True)
-                self._execute_attached_flow_triggers(step_node, group_path=step_ref.get("group_path", []))
+                self._execute_post_node_flow_triggers(
+                    step_node,
+                    control_payload=control_payload,
+                    group_path=step_ref.get("group_path", []),
+                )
                 entry["cursor"] += 1
                 if control_payload is not None and "task_plan_cursor_override" in control_payload:
                     entry["cursor"] = int(control_payload["task_plan_cursor_override"])
-                if control_payload is not None and "branch_status_override" in control_payload:
-                    entry["branch_override_status"] = self._normalize_task_plan_final_status(
-                        control_payload.get("branch_status_override", "")
-                    )
                 if control_payload is not None:
                     entry["completed_step_count"] += max(0, int(control_payload.get("task_plan_completed_step_delta", 0) or 0))
                 else:

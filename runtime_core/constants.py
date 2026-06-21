@@ -63,6 +63,10 @@ REPEAT_START_NODE_TYPES = {"AFNodeRepeatStart"}
 REPEAT_END_NODE_TYPES = {"AFNodeRepeatEnd"}
 BRANCH_START_NODE_TYPES = {"AFNodeBranchStart"}
 BRANCH_END_NODE_TYPES = {"AFNodeBranchEnd"}
+FLOW_SIDE_HOOK_NODE_TYPES = {
+    "AFNodeFlowToggle",
+    "AFNodeTaskStatusOverride",
+}
 PROPERTY_PACKAGE_BAKE_ACTION_NAME_PREFIX = "AF_PropertyPackageBake::"
 PROPERTY_PACKAGE_BAKE_ACTION_PROP_BAKE_ASSET_ID = "af_property_package_bake_asset_id"
 PROPERTY_PACKAGE_BAKE_ACTION_PROP_TASK_KIND = "af_property_package_bake_task_kind"

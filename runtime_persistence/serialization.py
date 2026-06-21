@@ -12,7 +12,27 @@ def _ensure_object_persistent_uuid(obj, object_persistent_uuid_prop):
     except Exception:
         existing = ""
     if existing:
-        return existing
+        try:
+            first_owner = None
+            for candidate in bpy.data.objects:
+                if candidate is None:
+                    continue
+                try:
+                    candidate_uuid = str(candidate.get(object_persistent_uuid_prop, "") or "").strip()
+                except Exception:
+                    candidate_uuid = ""
+                if candidate_uuid != existing:
+                    continue
+                first_owner = candidate
+                break
+            if first_owner is obj:
+                return existing
+            if first_owner is not None:
+                existing = ""
+            else:
+                return existing
+        except Exception:
+            return existing
     new_value = uuid.uuid4().hex
     try:
         obj[object_persistent_uuid_prop] = new_value

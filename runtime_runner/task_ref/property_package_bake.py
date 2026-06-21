@@ -290,12 +290,14 @@ class RuntimeTaskRefPropertyPackageBakeMixin:
         record_node_names = []
         prediction_dynamic = False
 
-        for flow_node in list(getattr(child_runner, "nodes_in_order", []) or []):
+        for index, flow_node in enumerate(list(getattr(child_runner, "nodes_in_order", []) or [])):
             if str(getattr(flow_node, "bl_idname", "") or "") != "AFNodeRecordPropertyPackage":
                 continue
             if bool(getattr(flow_node, "mute", False)):
                 continue
             record_node_names.append(str(getattr(flow_node, "name", "") or ""))
+            previous_group_path = list(getattr(child_runner, "current_group_path", []) or [])
+            child_runner.current_group_path = child_runner._flow_group_path_at(index)
             try:
                 property_package = child_runner._get_linked_output(flow_node, PROPERTY_PACKAGE_SOCKET_NAME, "property_package")
                 if property_package is None:
@@ -326,6 +328,8 @@ class RuntimeTaskRefPropertyPackageBakeMixin:
                             predicted_component_paths.add(component_path)
             except Exception:
                 prediction_dynamic = True
+            finally:
+                child_runner.current_group_path = previous_group_path
 
         predicted_items = _dedup_obj_items_impl(list(predicted_by_id.values()), "NAME_ASC")
         return {

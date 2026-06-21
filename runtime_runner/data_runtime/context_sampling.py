@@ -2,7 +2,7 @@ import copy
 import math
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 from ...runtime_core.constants import FlowExecutionError
 from ...runtime_flow.helpers import _find_single_from_input_socket
@@ -362,6 +362,257 @@ class RuntimeContextSamplingMixin:
                 raise FlowExecutionError("AF_E020", f"Geometry Attribute cannot convert {runtime_type} to Matrix", node.name)
             return output_mode, copy.deepcopy(value) if isinstance(value, dict) else _matrix_to_payload(Matrix.Identity(4))
         raise FlowExecutionError("AF_E020", f"Geometry Attribute output type '{output_mode}' is not supported", node.name)
+
+    def _geometry_attribute_data_type_for_value_type(self, node, value_type):
+        data_type = {
+            "BOOLEAN": "BOOLEAN",
+            "FLOAT": "FLOAT",
+            "INTEGER": "INT",
+            "VECTOR": "FLOAT_VECTOR",
+            "ROTATION": "QUATERNION",
+            "MATRIX": "FLOAT4X4",
+        }.get(str(value_type or "FLOAT"), "")
+        if data_type:
+            return data_type
+        raise FlowExecutionError("AF_E020", f"Geometry Attribute value type '{value_type}' is not supported", node.name)
+
+    def _ensure_geometry_attribute(self, node, attributes, attribute_name, data_type, domain, dry_run=False):
+        attribute_name = str(attribute_name or "").strip()
+        if not attribute_name:
+            raise FlowExecutionError("AF_E011", "Attribute Name is empty", node.name)
+        attribute = attributes.get(attribute_name) if hasattr(attributes, "get") else None
+        created = False
+        if attribute is None and not dry_run:
+            try:
+                attribute = attributes.new(name=attribute_name, type=data_type, domain=domain)
+                created = True
+            except Exception as exc:
+                raise FlowExecutionError("AF_E020", f"Failed to create attribute '{attribute_name}': {exc}", node.name)
+        if attribute is not None:
+            existing_domain = str(getattr(attribute, "domain", "") or "")
+            if existing_domain != str(domain or ""):
+                raise FlowExecutionError("AF_E020", f"Attribute '{attribute_name}' must be on the {domain.title()} domain", node.name)
+            existing_data_type = str(getattr(attribute, "data_type", "") or "")
+            if existing_data_type != str(data_type or ""):
+                raise FlowExecutionError(
+                    "AF_E020",
+                    f"Attribute '{attribute_name}' has type '{existing_data_type}' but expected '{data_type}'",
+                    node.name,
+                )
+        return attribute, created
+
+    def _geometry_attribute_element_count(self, attribute):
+        try:
+            return int(len(getattr(attribute, "data", None)))
+        except Exception:
+            return 0
+
+    def _rebuild_geometry_attribute_carrier_mesh(self, node, mesh, point_count):
+        if mesh is None:
+            raise FlowExecutionError("AF_E020", "Carrier Object mesh data is unavailable", node.name)
+        point_count = max(0, int(point_count or 0))
+        coordinates = [(float(index), 0.0, 0.0) for index in range(point_count)]
+        try:
+            if hasattr(mesh, "clear_geometry"):
+                mesh.clear_geometry()
+            mesh.from_pydata(coordinates, [], [])
+            mesh.update()
+        except Exception as exc:
+            raise FlowExecutionError("AF_E020", f"Failed to rebuild carrier mesh: {exc}", node.name)
+        return point_count
+
+    def _geometry_attribute_input_value(self, node):
+        value_type = str(getattr(node, "value_type", "FLOAT") or "FLOAT")
+        if value_type == "BOOLEAN":
+            return bool(self._input_bool(node, "Value", False))
+        if value_type == "INTEGER":
+            return int(self._input_int(node, "Value", 0))
+        if value_type == "VECTOR":
+            vector_value = self._input_vector(node, "Value", (0.0, 0.0, 0.0))
+            return (float(vector_value.x), float(vector_value.y), float(vector_value.z))
+        if value_type == "ROTATION":
+            return self._input_rotation(node, "Value")
+        if value_type == "MATRIX":
+            return self._input_matrix(node, "Value")
+        return float(self._input_float(node, "Value", 0.0))
+
+    def _prepare_geometry_attribute_target(self, node, target_object, attribute_name, value_type, expected_count=None, dry_run=False):
+        if target_object is None:
+            raise FlowExecutionError("AF_E001", "Target Object is missing", node.name)
+        if getattr(target_object, "type", "") != "MESH":
+            raise FlowExecutionError("AF_E020", "Geometry Attribute target object must be a Mesh", node.name)
+        if str(getattr(target_object, "mode", "") or "") == "EDIT":
+            raise FlowExecutionError("AF_E020", "Geometry Attribute target object must not be in Edit Mode", node.name)
+        attribute_name = str(attribute_name or "").strip()
+        if not attribute_name:
+            raise FlowExecutionError("AF_E011", "Attribute Name is empty", node.name)
+
+        mesh = getattr(target_object, "data", None)
+        attributes = getattr(mesh, "attributes", None) if mesh is not None else None
+        if mesh is None or attributes is None:
+            raise FlowExecutionError("AF_E020", "Target Object mesh data is unavailable", node.name)
+
+        try:
+            point_count = len(getattr(mesh, "vertices", []))
+        except Exception:
+            point_count = 0
+        if expected_count is not None and int(expected_count) != int(point_count):
+            raise FlowExecutionError(
+                "AF_E020",
+                "Object List count must match target mesh point count",
+                node.name,
+            )
+
+        data_type = self._geometry_attribute_data_type_for_value_type(node, value_type)
+        attribute, created = self._ensure_geometry_attribute(
+            node,
+            attributes,
+            attribute_name,
+            data_type,
+            "POINT",
+            dry_run=dry_run,
+        )
+        if attribute is not None:
+            attribute_count = self._geometry_attribute_element_count(attribute)
+            if int(attribute_count) != int(point_count):
+                raise FlowExecutionError(
+                    "AF_E020",
+                    "Geometry Attribute point count does not match target mesh point count",
+                    node.name,
+                )
+
+        return mesh, attribute, created, int(point_count), data_type
+
+    def _prepare_geometry_attribute_carrier_target(
+        self,
+        node,
+        carrier_object,
+        attribute_name,
+        index_attribute_name,
+        value_type,
+        expected_count=None,
+        dry_run=False,
+    ):
+        if carrier_object is None:
+            raise FlowExecutionError("AF_E001", "Carrier Object is missing", node.name)
+        if getattr(carrier_object, "type", "") != "MESH":
+            raise FlowExecutionError("AF_E020", "Geometry Attribute carrier object must be a Mesh", node.name)
+        if str(getattr(carrier_object, "mode", "") or "") == "EDIT":
+            raise FlowExecutionError("AF_E020", "Geometry Attribute carrier object must not be in Edit Mode", node.name)
+        attribute_name = str(attribute_name or "").strip()
+        if not attribute_name:
+            raise FlowExecutionError("AF_E011", "Attribute Name is empty", node.name)
+        index_attribute_name = str(index_attribute_name or "").strip()
+        if not index_attribute_name:
+            raise FlowExecutionError("AF_E011", "Index Attribute Name is empty", node.name)
+
+        mesh = getattr(carrier_object, "data", None)
+        attributes = getattr(mesh, "attributes", None) if mesh is not None else None
+        if mesh is None or attributes is None:
+            raise FlowExecutionError("AF_E020", "Carrier Object mesh data is unavailable", node.name)
+
+        try:
+            point_count = len(getattr(mesh, "vertices", []))
+        except Exception:
+            point_count = 0
+        desired_count = int(point_count if expected_count is None else max(0, int(expected_count or 0)))
+        rebuilt = False
+        will_rebuild = int(point_count) != int(desired_count)
+        if will_rebuild and not dry_run:
+            point_count = self._rebuild_geometry_attribute_carrier_mesh(node, mesh, desired_count)
+            rebuilt = True
+            attributes = getattr(mesh, "attributes", None)
+            if attributes is None:
+                raise FlowExecutionError("AF_E020", "Carrier Object mesh data is unavailable", node.name)
+        else:
+            point_count = desired_count
+
+        data_type = self._geometry_attribute_data_type_for_value_type(node, value_type)
+        attribute, created = self._ensure_geometry_attribute(
+            node,
+            attributes,
+            attribute_name,
+            data_type,
+            "POINT",
+            dry_run=dry_run,
+        )
+        index_attribute, created_index_attribute = self._ensure_geometry_attribute(
+            node,
+            attributes,
+            index_attribute_name,
+            "INT",
+            "POINT",
+            dry_run=dry_run,
+        )
+
+        should_validate_counts = not dry_run or not will_rebuild
+        if should_validate_counts:
+            if attribute is not None and self._geometry_attribute_element_count(attribute) != int(point_count):
+                raise FlowExecutionError(
+                    "AF_E020",
+                    "Geometry Attribute point count does not match target mesh point count",
+                    node.name,
+                )
+            if index_attribute is not None and self._geometry_attribute_element_count(index_attribute) != int(point_count):
+                raise FlowExecutionError(
+                    "AF_E020",
+                    "Geometry Attribute point count does not match target mesh point count",
+                    node.name,
+                )
+
+        return (
+            mesh,
+            attribute,
+            created,
+            index_attribute,
+            created_index_attribute,
+            rebuilt,
+            int(point_count),
+            data_type,
+        )
+
+    def _write_geometry_attribute_element_value(self, node, attribute, data_type, element_index, value):
+        if attribute is None:
+            return
+        try:
+            item = attribute.data[int(element_index)]
+        except Exception:
+            raise FlowExecutionError(
+                "AF_E020",
+                f"Element Index {int(element_index)} is out of range for attribute '{str(getattr(attribute, 'name', '') or '')}'",
+                node.name,
+            )
+
+        try:
+            if data_type == "BOOLEAN":
+                item.value = bool(value)
+                return
+            if data_type == "INT":
+                item.value = int(value)
+                return
+            if data_type == "FLOAT":
+                item.value = float(value)
+                return
+            if data_type == "FLOAT_VECTOR":
+                vector_value = Vector(value if value is not None else (0.0, 0.0, 0.0))
+                item.vector = (float(vector_value.x), float(vector_value.y), float(vector_value.z))
+                return
+            if data_type == "QUATERNION":
+                quaternion_value = value.copy() if isinstance(value, Quaternion) else Quaternion(tuple(value or (1.0, 0.0, 0.0, 0.0)))
+                item.value = quaternion_value
+                return
+            if data_type == "FLOAT4X4":
+                matrix_value = value.copy() if isinstance(value, Matrix) else Matrix(value)
+                item.value = matrix_value
+                return
+        except Exception as exc:
+            raise FlowExecutionError(
+                "AF_E020",
+                f"Failed to write attribute '{str(getattr(attribute, 'name', '') or '')}' at element {int(element_index)}: {exc}",
+                node.name,
+            )
+
+        raise FlowExecutionError("AF_E020", f"Attribute type '{data_type}' is not supported for writing", node.name)
 
     def _vector_scalar_component(self, vector_value, mode):
         vector = Vector(vector_value)

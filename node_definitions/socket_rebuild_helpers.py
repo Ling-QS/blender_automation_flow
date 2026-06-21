@@ -3,6 +3,15 @@ def build_socket_rebuild_helpers(
     _capture_dynamic_socket_state,
     _restore_dynamic_socket_state,
 ):
+    PARSE_PROPERTY_PACKAGE_INPUT_SPECS = (
+        ("AFSocketPropertyPackage", "Property Package"),
+    )
+    PARSE_PROPERTY_PACKAGE_OUTPUT_SPECS = (
+        ("AFSocketObjectList", "Object List"),
+        ("AFSocketPropertyDefinition", "Property Definition"),
+        ("AFSocketReport", "Report"),
+    )
+
     def _rebuild_sockets(node, input_specs, output_specs, include_default_values=True, restore_dynamic_state=True):
         input_state = []
         output_state = []
@@ -33,8 +42,36 @@ def build_socket_rebuild_helpers(
                 restore_default_values=include_default_values,
             )
 
+    def _sync_parse_property_package_sockets(node):
+        if str(getattr(node, "bl_idname", "") or "") != "AFNodeParsePropertyPackage":
+            return
+        input_signature = [
+            (str(getattr(socket, "bl_idname", "") or ""), str(getattr(socket, "name", "") or ""))
+            for socket in getattr(node, "inputs", [])
+        ]
+        output_signature = [
+            (str(getattr(socket, "bl_idname", "") or ""), str(getattr(socket, "name", "") or ""))
+            for socket in getattr(node, "outputs", [])
+        ]
+        if input_signature == list(PARSE_PROPERTY_PACKAGE_INPUT_SPECS) and output_signature == list(PARSE_PROPERTY_PACKAGE_OUTPUT_SPECS):
+            return
+        suspend_runtime_sync = None
+        resume_runtime_sync = None
+        try:
+            from ..node_system.tree import resume_runtime_sync, suspend_runtime_sync
+        except Exception:
+            pass
+        if suspend_runtime_sync is not None:
+            suspend_runtime_sync()
+        try:
+            _rebuild_sockets(node, PARSE_PROPERTY_PACKAGE_INPUT_SPECS, PARSE_PROPERTY_PACKAGE_OUTPUT_SPECS)
+        finally:
+            if resume_runtime_sync is not None:
+                resume_runtime_sync()
+
     return {
         "_rebuild_sockets": _rebuild_sockets,
+        "_sync_parse_property_package_sockets": _sync_parse_property_package_sockets,
     }
 
 

@@ -184,6 +184,7 @@ DISPLAY_HELPER_EXPORTS = (
 SOCKET_REBUILD_EXPORTS = (
     "_SOCKET_REBUILD_HELPERS",
     "_rebuild_sockets",
+    "_sync_parse_property_package_sockets",
 )
 
 INPUT_NODE_CLASS_NAMES = (
@@ -222,12 +223,16 @@ CONTEXT_GEOMETRY_NODE_CLASS_NAMES = (
     "AFNodeSampleObjectIndex",
     "AFNodeReduceContextValue",
     "AFNodeReadGeometryAttribute",
+    "AFNodeSetGeometryAttribute",
+    "AFNodePublishGeometryAttribute",
 )
 CONTEXT_GEOMETRY_NODE_EXPORTS = (
     "_sync_property_context_sockets",
     "_sync_sample_object_index_sockets",
     "_sync_context_reduce_value_sockets",
     "_sync_geometry_attribute_node_sockets",
+    "_sync_set_geometry_attribute_node_sockets",
+    "_sync_publish_geometry_attribute_node_sockets",
     *CONTEXT_GEOMETRY_NODE_CLASS_NAMES,
 )
 
@@ -294,6 +299,7 @@ FLOW_NODE_CLASS_NAMES = (
     "AFNodeGroup",
     "AFNodeStart",
     "AFNodeFlowToggle",
+    "AFNodeTaskStatusOverride",
     "AFNodeRepeatStart",
     "AFNodeRepeatEnd",
     "AFNodeSubflowStart",
@@ -500,6 +506,7 @@ def build_socket_rebuild_exports(
     return {
         "_SOCKET_REBUILD_HELPERS": socket_rebuild_helpers,
         "_rebuild_sockets": socket_rebuild_helpers["_rebuild_sockets"],
+        "_sync_parse_property_package_sockets": socket_rebuild_helpers["_sync_parse_property_package_sockets"],
     }
 
 

@@ -32,6 +32,16 @@ class AFAddonPreferences(bpy.types.AddonPreferences):
         description="Highlight currently running and background task nodes",
         default=True,
     )
+    show_custom_flow_sockets: bpy.props.BoolProperty(
+        name="Custom Flow Sockets",
+        description="Draw custom markers for Automation Flow socket endpoints",
+        default=True,
+    )
+    show_custom_flow_links: bpy.props.BoolProperty(
+        name="Custom Flow Links",
+        description="Draw the active Automation Flow link underlay",
+        default=True,
+    )
     show_custom_node_headers: bpy.props.BoolProperty(
         name="Custom Node Headers",
         description="Draw custom title bars for supported nodes",
@@ -75,6 +85,8 @@ class AFAddonPreferences(bpy.types.AddonPreferences):
         col = box.column(align=True)
         col.prop(self, "show_flow_zone_overlays")
         col.prop(self, "show_runtime_node_highlights")
+        col.prop(self, "show_custom_flow_sockets")
+        col.prop(self, "show_custom_flow_links")
         col.prop(self, "show_custom_node_headers")
         col.prop(self, "show_flow_toggle_trigger_links")
         col.prop(self, "show_property_status_chips")

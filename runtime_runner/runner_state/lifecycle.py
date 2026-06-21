@@ -25,6 +25,7 @@ class RuntimeLifecycleMixin:
         self.flow_branch_plans.clear()
         self.isolated_subflow_join_keys.clear()
         self.isolated_branch_start_keys.clear()
+        self.node_group_paths_in_order = []
         self.pending_branch_failure = None
         self.current_group_path = []
         self.stop_requested = False
@@ -60,8 +61,13 @@ class RuntimeLifecycleMixin:
         self.log("INFO", "PRECHECK_STARTED")
         self._compile_linear_flow()
         issues = []
-        for node in self.nodes_in_order:
-            issues.extend(self._precheck_node(node))
+        for index, node in enumerate(self.nodes_in_order):
+            previous_group_path = list(self.current_group_path)
+            self.current_group_path = self._flow_group_path_at(index)
+            try:
+                issues.extend(self._precheck_node(node))
+            finally:
+                self.current_group_path = previous_group_path
         self._report_precheck_issues(issues)
         self.log("INFO", "PRECHECK_PASSED")
 
@@ -110,6 +116,7 @@ class RuntimeLifecycleMixin:
             self.set_status(STATUS_PRECHECK)
             self.log("INFO", "PRECHECK_STARTED")
             self.nodes_in_order = [join_node]
+            self.node_group_paths_in_order = [[]]
             self.flow_branch_plans.clear()
             self.pending_branch_failure = None
             subflow_plan = self._compile_subflow_step_refs(join_node, join_node.name)
@@ -163,6 +170,7 @@ class RuntimeLifecycleMixin:
             self.set_status(STATUS_PRECHECK)
             self.log("INFO", "PRECHECK_STARTED")
             self.nodes_in_order = [start_node]
+            self.node_group_paths_in_order = [[]]
             self.flow_subflow_plans.clear()
             self.pending_branch_failure = None
             branch_plan = self._compile_branch_step_refs(end_node, start_node.name)

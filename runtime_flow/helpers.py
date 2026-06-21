@@ -3,6 +3,7 @@ import re
 from ..runtime_core.constants import (
     BRANCH_END_NODE_TYPES,
     BRANCH_START_NODE_TYPES,
+    FLOW_SIDE_HOOK_NODE_TYPES,
     NUMERIC_SOCKET_FAMILY_BY_IDNAME,
     REPEAT_END_NODE_TYPES,
     REPEAT_START_NODE_TYPES,
@@ -151,6 +152,10 @@ def _is_branch_start_node(node):
 
 def _is_branch_end_node(node):
     return getattr(node, "bl_idname", "") in BRANCH_END_NODE_TYPES
+
+
+def _is_flow_side_hook_node(node_or_type):
+    return str(getattr(node_or_type, "bl_idname", node_or_type) or "") in FLOW_SIDE_HOOK_NODE_TYPES
 
 
 def _link_is_valid(link):
@@ -306,13 +311,13 @@ def _flow_trigger_output_nodes(node, output_name):
     return [
         output_node
         for output_node in _output_nodes(node, output_name)
-        if getattr(output_node, "bl_idname", "") == "AFNodeFlowToggle"
+        if _is_flow_side_hook_node(output_node)
     ]
 
 
 def _first_output_node(node, output_name):
     for output_node in _output_nodes(node, output_name):
-        if getattr(output_node, "bl_idname", "") == "AFNodeFlowToggle":
+        if _is_flow_side_hook_node(output_node):
             continue
         return output_node
     return None

@@ -264,19 +264,12 @@ def build_task_node_helpers(
     def _sync_branch_end_sockets(node):
         input_specs = (
             ("AFSocketFlow", "Branch Flow"),
-            ("NodeSocketString", "Status"),
         )
         output_specs = ()
         input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
         output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
         if input_signature != input_specs or output_signature != output_specs:
             _rebuild_sockets(node, input_specs, output_specs)
-        status_input = getattr(node, "inputs", {}).get("Status") if hasattr(getattr(node, "inputs", None), "get") else None
-        if status_input is not None:
-            try:
-                status_input.hide_value = True
-            except Exception:
-                pass
 
     def _sync_run_background_task_plan_sockets(node):
         input_specs = (

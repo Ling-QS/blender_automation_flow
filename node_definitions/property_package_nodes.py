@@ -51,8 +51,8 @@ def build_property_package_node_classes(
 
         def init(self, context):
             self.inputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
-            self.outputs.new("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME)
             self.outputs.new("AFSocketObjectList", "Object List")
+            self.outputs.new("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME)
             self.outputs.new("AFSocketReport", "Report")
             _hide_default_auxiliary_outputs(self)
             _set_node_color(self, "GEOMETRY")

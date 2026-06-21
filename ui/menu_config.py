@@ -1,6 +1,7 @@
 FLOW_MENU_REGULAR_NODES = (
     ("AFNodeStart", "Start"),
     ("AFNodeFlowToggle", "FlowToggle"),
+    ("AFNodeTaskStatusOverride", "Task Status Override"),
     ("AFNodeEnd", "End"),
     ("AFNodeRunTaskPlan", "Run Task"),
     ("AFNodeRunBackgroundTaskPlan", "Run Background Task"),
@@ -27,6 +28,8 @@ PROPERTY_CONTEXT_DATA_MENU_NODES = (
     ("AFNodeSampleObjectIndex", "Sample Object Index"),
     ("AFNodeReduceContextValue", "Reduce Context Value"),
     ("AFNodeReadGeometryAttribute", "Read Geometry Attribute"),
+    ("AFNodeSetGeometryAttribute", "Set Geometry Attribute"),
+    ("AFNodePublishGeometryAttribute", "Publish Geometry Attribute"),
     ("AFNodeModifierPropertyData", "Modifier Data"),
     ("AFNodeObjectDisplayPropertyData", "Object Display Property Data"),
     ("AFNodeObjectTransformPropertyData", "Transform Data"),

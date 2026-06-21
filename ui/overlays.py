@@ -7,12 +7,16 @@ import blf
 from bpy.app.translations import pgettext_iface as iface_
 
 from ..node_system.sockets import is_flow_socket
-from ..node_system.tree import is_resolved_flow_socket
+from ..node_system.tree import is_resolved_flow_socket, node_tree_runtime_revision
+from ..runtime_core.constants import FLOW_SIDE_HOOK_NODE_TYPES
+from ..runtime_flow.helpers import _find_single_from_input_socket, _first_output_node, _valid_socket_links
+from ..runtime_runner.core import FlowRunner
 from ..runtime_runner.core.active import get_active_runner
 from .preferences import _ui_pref_enabled
 from .overlay_context import (
     _iter_visible_nodes,
     _load_serialized_group_path,
+    _node_editor_group_path,
     _node_editor_root_tree,
     _node_editor_zoom_factor,
     _path_item_node_tree,
@@ -39,6 +43,7 @@ from .overlay_pairs import (
     _annotate_overlay_pair_nesting,
     _append_overlay_entry_with_style,
     _collect_branch_overlay_pairs,
+    _collect_control_overlay_pairs,
     _collect_execution_overlay_pairs,
     _collect_repeat_overlay_pairs,
     _collect_subflow_overlay_pairs,
@@ -63,6 +68,7 @@ _FLOW_SOCKET_MARKER_OUTLINE_COLOR = (0.08, 0.10, 0.16, 0.92)
 _FLOW_SOCKET_LINK_UNDERLAY_COLOR = (0.34, 0.74, 1.00, 0.60)
 _FLOW_SOCKET_VIEWPORT_MARGIN = 96.0
 _OVERLAY_PAIR_CACHE = {}
+_FLOW_UNDERLAY_LINK_CACHE = {}
 _QUICK_RUN_NODE_TYPES = {
     "AFNodeStorePropertyPackage",
     "AFNodeApplyObjectProperties",
@@ -81,6 +87,33 @@ _FLOW_STATUS_COLORS = {
 
 def _active_runner():
     return get_active_runner()
+
+
+def _cache_pointer_token(data):
+    if data is None:
+        return 0
+    return int(data.as_pointer()) if hasattr(data, "as_pointer") else id(data)
+
+
+def _underlay_signature_value(value):
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (str(key), _underlay_signature_value(item_value))
+                for key, item_value in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_underlay_signature_value(item) for item in value)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return round(float(value), 6)
+    if value is None:
+        return ""
+    return str(value)
 
 
 def _background_task_overlay_entries(context, node_tree, runner):
@@ -294,12 +327,15 @@ def _cached_overlay_pair_draw_items(node_tree):
     if cached is not None and cached.get("signature") == signature:
         return cached.get("draw_items", ())
 
+    # Reuse one completed control-pair snapshot so execution/task overlays and
+    # control overlays resolve the same nested node coverage.
+    control_pairs = _collect_control_overlay_pairs(node_tree)
     overlay_pairs = []
-    overlay_pairs.extend(_collect_execution_overlay_pairs(node_tree))
-    overlay_pairs.extend(_collect_task_overlay_pairs(node_tree))
+    overlay_pairs.extend(_collect_execution_overlay_pairs(node_tree, control_pairs=control_pairs))
+    overlay_pairs.extend(_collect_task_overlay_pairs(node_tree, control_pairs=control_pairs))
     overlay_pairs.extend(_collect_repeat_overlay_pairs(node_tree))
-    overlay_pairs.extend(_collect_subflow_overlay_pairs(node_tree))
-    overlay_pairs.extend(_collect_branch_overlay_pairs(node_tree))
+    overlay_pairs.extend(_collect_subflow_overlay_pairs(node_tree, control_pairs=control_pairs))
+    overlay_pairs.extend(_collect_branch_overlay_pairs(node_tree, control_pairs=control_pairs))
     overlay_pairs = _annotate_overlay_pair_nesting(overlay_pairs)
 
     hull_cache = {}
@@ -359,6 +395,7 @@ def _custom_math_header_palette(node):
     flow_types = {
         "AFNodeStart",
         "AFNodeFlowToggle",
+        "AFNodeTaskStatusOverride",
         "AFNodeRepeatStart",
         "AFNodeRepeatEnd",
         "AFNodeSubflowStart",
@@ -389,6 +426,8 @@ def _custom_math_header_palette(node):
         "AFNodeEvaluateTaskDependencies",
     }
     package_types = {
+        "AFNodeSetGeometryAttribute",
+        "AFNodePublishGeometryAttribute",
         "AFNodeCreatePropertyPackage",
         "AFNodeStorePropertyPackage",
         "AFNodeApplyObjectProperties",
@@ -797,17 +836,17 @@ def _flow_toggle_link_runtime_region_points(link, view2d, curving_factor):
     return points
 
 
-def _is_flow_toggle_trigger_link(link):
+def _is_flow_side_hook_trigger_link(link):
     to_node = getattr(link, "to_node", None)
     to_socket = getattr(link, "to_socket", None)
     from_socket = getattr(link, "from_socket", None)
     if to_node is None or to_socket is None or from_socket is None:
         return False
-    if getattr(to_node, "bl_idname", "") != "AFNodeFlowToggle":
+    if str(getattr(to_node, "bl_idname", "") or "") not in FLOW_SIDE_HOOK_NODE_TYPES:
         return False
     try:
-        flow_toggle_inputs = getattr(to_node, "inputs", None)
-        first_input = flow_toggle_inputs[0] if flow_toggle_inputs and len(flow_toggle_inputs) > 0 else None
+        flow_side_hook_inputs = getattr(to_node, "inputs", None)
+        first_input = flow_side_hook_inputs[0] if flow_side_hook_inputs and len(flow_side_hook_inputs) > 0 else None
     except Exception:
         first_input = None
     if first_input is not None and to_socket == first_input and is_flow_socket(to_socket):
@@ -890,7 +929,7 @@ def _trim_polyline_region_points(region_points, trim_start=0.0, trim_end=0.0):
 
 def _flow_toggle_trigger_links(node_tree):
     for link in getattr(node_tree, "links", []):
-        if not _is_flow_toggle_trigger_link(link):
+        if not _is_flow_side_hook_trigger_link(link):
             continue
         to_socket = getattr(link, "to_socket", None)
         from_socket = getattr(link, "from_socket", None)
@@ -948,25 +987,947 @@ def _draw_flow_toggle_trigger_links(node_tree):
         )
 
 
-def _flow_link_underlay_links(node_tree):
-    for link in getattr(node_tree, "links", []):
-        from_node = getattr(link, "from_node", None)
+def _socket_identity(socket):
+    if socket is None:
+        return None
+    node = getattr(socket, "node", None)
+    if node is None:
+        return None
+    try:
+        node_key = int(node.as_pointer())
+    except Exception:
+        node_key = str(getattr(node, "name", "") or "")
+    return (
+        node_key,
+        bool(getattr(socket, "is_output", False)),
+        str(getattr(socket, "identifier", "") or getattr(socket, "name", "") or ""),
+    )
+
+
+def _flow_link_identity(link):
+    return (
+        _socket_identity(getattr(link, "from_socket", None)),
+        _socket_identity(getattr(link, "to_socket", None)),
+    )
+
+
+def _is_flow_underlay_candidate_link(link):
+    from_node = getattr(link, "from_node", None)
+    to_node = getattr(link, "to_node", None)
+    from_socket = getattr(link, "from_socket", None)
+    to_socket = getattr(link, "to_socket", None)
+    if from_node is None or to_node is None or from_socket is None or to_socket is None:
+        return False
+    if bool(getattr(from_socket, "hide", False)) or bool(getattr(to_socket, "hide", False)):
+        return False
+    if not bool(getattr(link, "is_valid", True)):
+        return False
+    if _is_flow_side_hook_trigger_link(link):
+        return False
+    if not is_resolved_flow_socket(from_node, from_socket):
+        return False
+    if not is_resolved_flow_socket(to_node, to_socket):
+        return False
+    return True
+
+
+def _flow_input_socket(node, preferred_name="Flow In"):
+    inputs = getattr(node, "inputs", None)
+    get_input = getattr(inputs, "get", lambda _name: None)
+    preferred_socket = get_input(preferred_name) if preferred_name else None
+    if preferred_socket is not None and is_flow_socket(preferred_socket):
+        return preferred_socket
+    flow_inputs = [socket for socket in list(inputs or []) if is_flow_socket(socket)]
+    if len(flow_inputs) == 1:
+        return flow_inputs[0]
+    return preferred_socket if preferred_socket is not None and is_flow_socket(preferred_socket) else None
+
+
+def _flow_output_socket(node, preferred_name="Flow Out"):
+    outputs = getattr(node, "outputs", None)
+    get_output = getattr(outputs, "get", lambda _name: None)
+    preferred_socket = get_output(preferred_name) if preferred_name else None
+    if preferred_socket is not None and is_flow_socket(preferred_socket):
+        return preferred_socket
+    flow_outputs = [socket for socket in list(outputs or []) if is_flow_socket(socket)]
+    if len(flow_outputs) == 1:
+        return flow_outputs[0]
+    return preferred_socket if preferred_socket is not None and is_flow_socket(preferred_socket) else None
+
+
+def _flow_output_path_links_to_target(output_socket, target_socket, visited_reroutes=None):
+    if output_socket is None or target_socket is None:
+        return []
+
+    target_identity = _socket_identity(target_socket)
+    if target_identity is None:
+        return []
+
+    visited = set(visited_reroutes or ())
+    for link in _valid_socket_links(output_socket):
+        if not _is_flow_underlay_candidate_link(link):
+            continue
         to_node = getattr(link, "to_node", None)
-        from_socket = getattr(link, "from_socket", None)
         to_socket = getattr(link, "to_socket", None)
-        if from_node is None or to_node is None or from_socket is None or to_socket is None:
+        if _socket_identity(to_socket) == target_identity:
+            return [link]
+        if to_node is None or str(getattr(to_node, "bl_idname", "") or "") != "NodeReroute":
             continue
-        if bool(getattr(from_socket, "hide", False)) or bool(getattr(to_socket, "hide", False)):
+        reroute_key = int(to_node.as_pointer()) if hasattr(to_node, "as_pointer") else id(to_node)
+        if reroute_key in visited:
             continue
-        if not bool(getattr(link, "is_valid", True)):
+        reroute_outputs = getattr(to_node, "outputs", None)
+        reroute_output_socket = reroute_outputs[0] if reroute_outputs and len(reroute_outputs) > 0 else None
+        nested_path = _flow_output_path_links_to_target(
+            reroute_output_socket,
+            target_socket,
+            visited | {reroute_key},
+        )
+        if nested_path:
+            return [link] + list(nested_path)
+    return []
+
+
+def _add_flow_underlay_links(path_links, ordered_links, seen_links):
+    for link in list(path_links or []):
+        link_key = _flow_link_identity(link)
+        if link_key in seen_links:
             continue
-        if _is_flow_toggle_trigger_link(link):
+        seen_links.add(link_key)
+        ordered_links.append(link)
+
+
+def _extend_underlay_links_to_step_ref(
+    runner,
+    source_node,
+    output_name,
+    target_step_ref,
+    preferred_input_name,
+    owner_node_name,
+    ordered_links,
+    seen_links,
+):
+    if source_node is None or not isinstance(target_step_ref, dict):
+        return False
+    output_socket = _flow_output_socket(source_node, output_name)
+    if output_socket is None:
+        return False
+    try:
+        target_node = runner._resolve_step_ref(target_step_ref, owner_node_name)
+    except Exception:
+        return False
+    target_socket = _flow_input_socket(target_node, preferred_input_name)
+    if target_socket is None:
+        return False
+    path_links = _flow_output_path_links_to_target(output_socket, target_socket)
+    if not path_links:
+        return False
+    _add_flow_underlay_links(path_links, ordered_links, seen_links)
+    return True
+
+
+def _collect_visible_linear_flow_entries(runner, start_node, stop_node_types, group_path):
+    entries = []
+    current = start_node
+    active_group_path = [
+        dict(item)
+        for item in list(group_path or [])
+        if isinstance(item, dict)
+    ]
+    visited = set()
+
+    while current is not None:
+        current_identity = runner._flow_entry_identity(current, active_group_path)
+        if current_identity in visited:
+            raise RuntimeError("Visible flow segment has a loop")
+        visited.add(current_identity)
+        entries.append(
+            {
+                "node": current,
+                "group_path": [dict(item) for item in active_group_path],
+            }
+        )
+        if str(getattr(current, "bl_idname", "") or "") in set(stop_node_types or ()):
+            break
+        current = _first_output_node(current, "Flow Out")
+
+    return entries
+
+
+def _find_visible_task_start_for_output(task_output_node):
+    if task_output_node is None or str(getattr(task_output_node, "bl_idname", "") or "") != "AFNodeTaskOutput":
+        return None
+    inputs = getattr(task_output_node, "inputs", None)
+    flow_input = getattr(inputs, "get", lambda _name: None)("Flow In")
+    if flow_input is None:
+        return None
+
+    current, _current_socket = _find_single_from_input_socket(flow_input)
+    visited = {int(task_output_node.as_pointer()) if hasattr(task_output_node, "as_pointer") else id(task_output_node)}
+    while current is not None:
+        current_key = int(current.as_pointer()) if hasattr(current, "as_pointer") else id(current)
+        if current_key in visited:
+            return None
+        visited.add(current_key)
+        if str(getattr(current, "bl_idname", "") or "") == "AFNodeTaskStart":
+            return current
+        current_inputs = getattr(current, "inputs", None)
+        current_flow_input = getattr(current_inputs, "get", lambda _name: None)("Flow In")
+        if current_flow_input is None:
+            return None
+        current, _current_socket = _find_single_from_input_socket(current_flow_input)
+    return None
+
+
+def _select_visible_task_plan_nodes(runner, node_tree):
+    task_outputs = list(runner._find_task_group_nodes(node_tree, "AFNodeTaskOutput"))
+    linked_task_outputs = []
+    for node in task_outputs:
+        flow_input = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Flow In")
+        if bool(getattr(flow_input, "links", None)):
+            linked_task_outputs.append(node)
+    if linked_task_outputs:
+        task_outputs = linked_task_outputs
+
+    task_starts = list(runner._find_task_group_nodes(node_tree, "AFNodeTaskStart"))
+    linked_task_starts = []
+    for node in task_starts:
+        flow_output = getattr(getattr(node, "outputs", None), "get", lambda _name: None)("Flow Out")
+        if bool(getattr(flow_output, "links", None)):
+            linked_task_starts.append(node)
+    if linked_task_starts:
+        task_starts = linked_task_starts
+    return task_starts, task_outputs
+
+
+def _build_task_underlay_context_from_output(runner, node_tree, task_output_node, group_path):
+    if runner is None or node_tree is None or task_output_node is None:
+        return None
+    if getattr(task_output_node, "id_data", None) != node_tree:
+        return None
+    if str(getattr(task_output_node, "bl_idname", "") or "") != "AFNodeTaskOutput":
+        return None
+
+    task_start_node = _find_visible_task_start_for_output(task_output_node)
+    if task_start_node is None or getattr(task_start_node, "id_data", None) != node_tree:
+        return None
+
+    entries = _collect_visible_linear_flow_entries(
+        runner,
+        task_start_node,
+        {"AFNodeTaskOutput"},
+        group_path,
+    )
+    if not entries or entries[-1].get("node") != task_output_node:
+        return None
+
+    owner_node_name = str(getattr(task_output_node, "name", "") or getattr(node_tree, "name", "") or "Task Underlay")
+    return _build_underlay_context_from_entries(
+        runner,
+        entries,
+        owner_node_name,
+        entry_anchor=None,
+        mode="TASK",
+    )
+
+
+def _collect_active_task_underlay_contexts_from_plan(
+    runner,
+    node_tree,
+    plan,
+    owner_node_name,
+    contexts,
+    seen_outputs,
+):
+    normalized_plan = runner._normalize_local_segment_plan(plan)
+    step_refs = list(normalized_plan.get("step_refs", []) or [])
+    if not step_refs:
+        return
+
+    step_nodes = [runner._resolve_step_ref(step_ref, owner_node_name) for step_ref in step_refs]
+    branch_plans = dict(normalized_plan.get("branch_plans", {}) or {})
+    subflow_plans = dict(normalized_plan.get("subflow_plans", {}) or {})
+
+    for index, step_node in enumerate(step_nodes):
+        step_ref = step_refs[index]
+        group_path = list(step_ref.get("group_path", []) or [])
+        node_type = str(getattr(step_node, "bl_idname", "") or "")
+
+        if node_type == "AFNodeRunTaskPlan":
+            entries, _linked_count, _enabled_count = runner._collect_run_task_plan_entries(step_node)
+            for entry in entries:
+                if not bool(entry.get("enabled", False)):
+                    continue
+                source_node = entry.get("from_node")
+                if source_node is None:
+                    continue
+                if getattr(source_node, "id_data", None) != node_tree:
+                    continue
+                if str(getattr(source_node, "bl_idname", "") or "") != "AFNodeTaskOutput":
+                    continue
+                source_key = int(source_node.as_pointer()) if hasattr(source_node, "as_pointer") else id(source_node)
+                if source_key in seen_outputs:
+                    continue
+                context_data = _build_task_underlay_context_from_output(runner, node_tree, source_node, group_path)
+                if context_data is None:
+                    continue
+                seen_outputs.add(source_key)
+                contexts.append(context_data)
+
+        if node_type == "AFNodeBranchStart":
+            trigger_state = _evaluate_underlay_trigger_state(runner, step_node, group_path)
+            branch_plan = branch_plans.get(index)
+            if trigger_state is not False and isinstance(branch_plan, dict):
+                _collect_active_task_underlay_contexts_from_plan(
+                    runner,
+                    node_tree,
+                    branch_plan,
+                    str(getattr(step_node, "name", "") or owner_node_name),
+                    contexts,
+                    seen_outputs,
+                )
+            if trigger_state is True:
+                break
             continue
-        if not is_resolved_flow_socket(from_node, from_socket):
+
+        if node_type == "AFNodeSubflowJoin":
+            trigger_state = _evaluate_underlay_trigger_state(runner, step_node, group_path)
+            subflow_plan = subflow_plans.get(index)
+            if trigger_state is not False and isinstance(subflow_plan, dict):
+                _collect_active_task_underlay_contexts_from_plan(
+                    runner,
+                    node_tree,
+                    subflow_plan,
+                    str(getattr(step_node, "name", "") or owner_node_name),
+                    contexts,
+                    seen_outputs,
+                )
+
+
+def _append_underlay_links_from_context(context_data, ordered_links, seen_links):
+    if not isinstance(context_data, dict):
+        return False
+    runner = context_data.get("runner")
+    plan = context_data.get("plan")
+    owner_node_name = str(context_data.get("owner_node_name", "") or "")
+    entry_anchor = context_data.get("entry_anchor")
+    if runner is None or not isinstance(plan, dict):
+        return False
+
+    step_refs = list(runner._normalize_local_segment_plan(plan).get("step_refs", []) or [])
+    if entry_anchor is not None and step_refs:
+        _extend_underlay_links_to_step_ref(
+            runner,
+            entry_anchor.get("node"),
+            entry_anchor.get("output_name", "Flow Out"),
+            step_refs[0],
+            "Flow In",
+            owner_node_name,
+            ordered_links,
+            seen_links,
+        )
+    _collect_plan_active_underlay_links(
+        runner,
+        plan,
+        owner_node_name,
+        ordered_links,
+        seen_links,
+    )
+    return bool(ordered_links)
+
+
+def _build_underlay_context_from_entries(runner, entries, owner_node_name, *, entry_anchor=None, mode="FLOW"):
+    if runner is None or not entries:
+        return None
+    step_refs = [
+        runner._make_step_ref(entry["node"], entry.get("group_path", []))
+        for entry in entries
+    ]
+    plan = runner._compile_local_segment_plan(step_refs, owner_node_name, lambda _entry: 0)
+    return {
+        "runner": runner,
+        "plan": plan,
+        "owner_node_name": str(owner_node_name or "Underlay"),
+        "entry_anchor": dict(entry_anchor) if isinstance(entry_anchor, dict) else None,
+        "mode": str(mode or "FLOW"),
+    }
+
+
+def _select_visible_flow_group_sockets(runner, node_tree, node_type, socket_collection_name):
+    matches = list(runner._find_group_flow_socket_nodes(node_tree, node_type, socket_collection_name))
+    linked_matches = [
+        (node, socket)
+        for node, socket in matches
+        if bool(getattr(socket, "links", None))
+    ]
+    return linked_matches or matches
+
+
+def _current_underlay_playback_state():
+    try:
+        from ..operators import flow_run as flow_run_module
+
+        return {
+            "playing": bool(getattr(flow_run_module, "_is_animation_playing", lambda: False)()),
+            "on_play": False,
+            "on_pause": False,
+        }
+    except Exception:
+        return {
+            "playing": False,
+            "on_play": False,
+            "on_pause": False,
+        }
+
+
+def _root_underlay_playback_ui_context():
+    return {"playback_state": _current_underlay_playback_state()}
+
+
+def _make_root_underlay_start_context(start_node_name, ui_context=None, auto_follow=False):
+    start_name = str(start_node_name or "").strip()
+    if not start_name:
+        return None
+    return {
+        "start_node_name": start_name,
+        "ui_context": dict(ui_context or {}),
+        "auto_follow": bool(auto_follow),
+    }
+
+
+def _pending_auto_follow_underlay_contexts(root_tree, scene):
+    if root_tree is None or scene is None:
+        return []
+    try:
+        from ..operators import flow_run as flow_run_module
+    except Exception:
+        return []
+
+    pending_entries = []
+    pending_map = getattr(flow_run_module, "_AUTO_FOLLOW_PENDING_STARTS", None)
+    if not isinstance(pending_map, dict):
+        return []
+
+    root_tree_name = str(getattr(root_tree, "name", "") or "")
+    scene_name = str(getattr(scene, "name", "") or "")
+    for key, entry in list(pending_map.items()):
+        if not isinstance(entry, dict):
             continue
-        if not is_resolved_flow_socket(to_node, to_socket):
+        if str(entry.get("tree_name", "") or "") != root_tree_name:
             continue
-        yield link
+        if str(entry.get("scene_name", "") or "") != scene_name:
+            continue
+        start_node_name = str(entry.get("start_node_name", "") or "").strip()
+        start_node = root_tree.nodes.get(start_node_name) if start_node_name else None
+        if start_node is None or str(getattr(start_node, "bl_idname", "") or "") != "AFNodeStart":
+            continue
+        if not bool(getattr(start_node, "auto_follow_enabled", False)):
+            continue
+        pending_entries.append(
+            (
+                int(getattr(start_node, "auto_order", entry.get("auto_order", 0)) or 0),
+                float(entry.get("first_dirty_at", entry.get("last_dirty_at", 0.0)) or 0.0),
+                str(key or ""),
+                start_node_name,
+                dict(entry.get("playback_state") or {}),
+            )
+        )
+
+    if not pending_entries:
+        return []
+
+    pending_entries.sort(key=lambda item: (item[1], item[0], item[2]))
+    contexts = []
+    for _auto_order, _dirty_at, _entry_key, start_node_name, playback_state in pending_entries:
+        context = _make_root_underlay_start_context(
+            start_node_name,
+            ui_context={"playback_state": playback_state},
+            auto_follow=True,
+        )
+        if context is not None:
+            contexts.append(context)
+    return contexts
+
+
+def _dedupe_root_underlay_start_contexts(start_contexts):
+    contexts = []
+    seen_start_names = set()
+    for context in list(start_contexts or []):
+        if not isinstance(context, dict):
+            continue
+        start_node_name = str(context.get("start_node_name", "") or "").strip()
+        if not start_node_name or start_node_name in seen_start_names:
+            continue
+        seen_start_names.add(start_node_name)
+        normalized = _make_root_underlay_start_context(
+            start_node_name,
+            ui_context=context.get("ui_context", {}),
+            auto_follow=context.get("auto_follow", False),
+        )
+        if normalized is not None:
+            contexts.append(normalized)
+    return contexts
+
+
+def _root_underlay_start_contexts(root_tree, scene):
+    if root_tree is None:
+        return []
+
+    contexts = []
+    active_runner = _active_runner()
+    if (
+        active_runner is not None
+        and getattr(active_runner, "node_tree", None) == root_tree
+        and (scene is None or getattr(active_runner, "scene", None) == scene)
+    ):
+        start_node_name = str(getattr(active_runner, "start_node_name", "") or "").strip()
+        start_node = root_tree.nodes.get(start_node_name) if start_node_name else None
+        if start_node is not None and str(getattr(start_node, "bl_idname", "") or "") == "AFNodeStart":
+            context = _make_root_underlay_start_context(
+                start_node_name,
+                ui_context=getattr(active_runner, "ui_context", {}) or {},
+                auto_follow=getattr(active_runner, "auto_follow", False),
+            )
+            if context is not None:
+                contexts.append(context)
+
+    contexts.extend(_pending_auto_follow_underlay_contexts(root_tree, scene))
+
+    start_nodes = [
+        node
+        for node in getattr(root_tree, "nodes", [])
+        if str(getattr(node, "bl_idname", "") or "") == "AFNodeStart"
+    ]
+    playback_ui_context = _root_underlay_playback_ui_context()
+
+    manual_start_nodes = [
+        node
+        for node in start_nodes
+        if bool(getattr(node, "is_active_start", False))
+    ]
+    for node in sorted(manual_start_nodes, key=lambda item: str(getattr(item, "name", "") or "")):
+        context = _make_root_underlay_start_context(
+            getattr(node, "name", ""),
+            ui_context=playback_ui_context,
+            auto_follow=False,
+        )
+        if context is not None:
+            contexts.append(context)
+
+    auto_follow_start_nodes = [
+        node
+        for node in start_nodes
+        if bool(getattr(node, "auto_follow_enabled", False))
+    ]
+    for node in sorted(
+        auto_follow_start_nodes,
+        key=lambda item: (
+            int(getattr(item, "auto_order", 0) or 0),
+            str(getattr(item, "name", "") or ""),
+        ),
+    ):
+        context = _make_root_underlay_start_context(
+            getattr(node, "name", ""),
+            ui_context=playback_ui_context,
+            auto_follow=True,
+        )
+        if context is not None:
+            contexts.append(context)
+
+    # A Start without manual-enable or auto-follow is not treated as an effective
+    # root underlay entry when multiple Starts exist. Otherwise the overlay would
+    # drift away from actual run selection and expand back toward "draw everything".
+    # We only accept that kind of Start as a final fallback when the tree has
+    # exactly one Start and no explicit effective Start contexts were found.
+    if not contexts and len(start_nodes) == 1:
+        context = _make_root_underlay_start_context(
+            getattr(start_nodes[0], "name", ""),
+            ui_context=playback_ui_context,
+            auto_follow=False,
+        )
+        if context is not None:
+            contexts.append(context)
+
+    return _dedupe_root_underlay_start_contexts(contexts)
+
+
+def _root_underlay_contexts_signature(root_tree, scene):
+    return tuple(
+        (
+            str(context.get("start_node_name", "") or ""),
+            bool(context.get("auto_follow", False)),
+            _underlay_signature_value(context.get("ui_context", {})),
+        )
+        for context in _root_underlay_start_contexts(root_tree, scene)
+    )
+
+
+def _visible_underlay_context_signature(node_tree, root_tree, scene):
+    return (
+        _cache_pointer_token(node_tree),
+        int(node_tree_runtime_revision(node_tree)),
+        _cache_pointer_token(root_tree),
+        int(node_tree_runtime_revision(root_tree)),
+        _cache_pointer_token(scene),
+        int(getattr(scene, "frame_current", 0) or 0) if scene is not None else 0,
+        round(float(getattr(scene, "frame_subframe", 0.0) or 0.0), 6) if scene is not None else 0.0,
+        _underlay_signature_value(_node_editor_group_path(bpy.context)),
+    )
+
+
+def _build_root_underlay_contexts(root_tree, scene):
+    context_items = []
+    for start_context in _root_underlay_start_contexts(root_tree, scene):
+        runner_kwargs = {
+            "ui_context": dict(start_context.get("ui_context", {}) or {}),
+            "start_node_name": str(start_context.get("start_node_name", "") or ""),
+            "auto_follow": bool(start_context.get("auto_follow", False)),
+        }
+        runner = FlowRunner(root_tree, scene, **runner_kwargs)
+        start_node_name = str(runner_kwargs.get("start_node_name", "") or "")
+        start_node = root_tree.nodes.get(start_node_name) if start_node_name else None
+        if start_node is None or str(getattr(start_node, "bl_idname", "") or "") != "AFNodeStart":
+            continue
+        try:
+            entries = _collect_visible_linear_flow_entries(runner, start_node, {"AFNodeEnd"}, [])
+        except Exception:
+            continue
+        if not entries or str(getattr(entries[-1].get("node"), "bl_idname", "") or "") != "AFNodeEnd":
+            continue
+        owner_node_name = str(getattr(entries[0].get("node"), "name", "") or getattr(root_tree, "name", "") or "Underlay")
+        try:
+            context_data = _build_underlay_context_from_entries(
+                runner,
+                entries,
+                owner_node_name,
+                entry_anchor=None,
+                mode="FLOW_ROOT",
+            )
+        except Exception:
+            continue
+        if context_data is not None:
+            context_items.append(context_data)
+    return context_items
+
+
+def _build_visible_underlay_context(node_tree):
+    context = bpy.context
+    scene = getattr(context, "scene", None)
+    if scene is None or node_tree is None:
+        return None
+
+    root_tree = _node_editor_root_tree(context, node_tree)
+    if root_tree is None:
+        return None
+    if node_tree == root_tree:
+        return None
+
+    runner = FlowRunner(root_tree, scene)
+    group_path = _node_editor_group_path(context)
+    runner.current_group_path = list(group_path)
+
+    flow_group_inputs = _select_visible_flow_group_sockets(runner, node_tree, "NodeGroupInput", "outputs")
+    flow_group_outputs = _select_visible_flow_group_sockets(runner, node_tree, "NodeGroupOutput", "inputs")
+    if len(flow_group_inputs) == 1 and len(flow_group_outputs) == 1:
+        flow_input_node, flow_input_socket = flow_group_inputs[0]
+        expected_group_output, _output_socket = flow_group_outputs[0]
+        start_node = _first_output_node(flow_input_node, flow_input_socket.name)
+        if start_node is None:
+            return None
+        entries = _collect_visible_linear_flow_entries(
+            runner,
+            start_node,
+            {"NodeGroupOutput"},
+            group_path,
+        )
+        if not entries or entries[-1].get("node") != expected_group_output:
+            return None
+        owner_node_name = str(getattr(entries[0].get("node"), "name", "") or getattr(node_tree, "name", "") or "Underlay")
+        return _build_underlay_context_from_entries(
+            runner,
+            entries,
+            owner_node_name,
+            entry_anchor={
+                "node": flow_input_node,
+                "output_name": str(getattr(flow_input_socket, "name", "") or ""),
+            },
+            mode="FLOW_GROUP",
+        )
+
+    task_starts, task_outputs = _select_visible_task_plan_nodes(runner, node_tree)
+    if len(task_starts) != 1 or len(task_outputs) != 1:
+        return None
+    task_context = _build_task_underlay_context_from_output(runner, node_tree, task_outputs[0], group_path)
+    if task_context is None:
+        return None
+    task_context["mode"] = "TASK_GROUP"
+    return task_context
+
+
+def _evaluate_underlay_trigger_state(runner, node, group_path):
+    if runner is None or node is None:
+        return None
+    previous_group_path = list(getattr(runner, "current_group_path", []))
+    try:
+        runner.current_group_path = [
+            dict(item)
+            for item in list(group_path or [])
+            if isinstance(item, dict)
+        ]
+        return bool(runner._input_bool(node, "Trigger", False))
+    except Exception:
+        return None
+    finally:
+        runner.current_group_path = previous_group_path
+
+
+def _collect_branch_underlay_links(runner, branch_start_node, branch_plan, ordered_links, seen_links):
+    normalized_plan = runner._normalize_local_segment_plan(branch_plan)
+    step_refs = list(normalized_plan.get("step_refs", []) or [])
+    end_ref = normalized_plan.get("end_ref") if isinstance(normalized_plan.get("end_ref"), dict) else None
+    if step_refs:
+        first_target_ref = step_refs[0]
+        preferred_input_name = "Flow In"
+    else:
+        first_target_ref = end_ref
+        preferred_input_name = "Branch Flow"
+    if first_target_ref is not None:
+        _extend_underlay_links_to_step_ref(
+            runner,
+            branch_start_node,
+            "Branch Flow",
+            first_target_ref,
+            preferred_input_name,
+            str(getattr(branch_start_node, "name", "") or "Branch Start"),
+            ordered_links,
+            seen_links,
+        )
+    _collect_plan_active_underlay_links(
+        runner,
+        normalized_plan,
+        str(getattr(branch_start_node, "name", "") or "Branch Start"),
+        ordered_links,
+        seen_links,
+        exit_step_ref=end_ref,
+        exit_input_name="Branch Flow",
+    )
+
+
+def _collect_subflow_underlay_links(runner, join_node, join_step_ref, subflow_plan, ordered_links, seen_links):
+    normalized_plan = runner._normalize_local_segment_plan(subflow_plan)
+    start_node = runner._find_subflow_start_for_join(join_node)
+    if start_node is None:
+        return
+    step_refs = list(normalized_plan.get("step_refs", []) or [])
+    if step_refs:
+        first_target_ref = step_refs[0]
+        preferred_input_name = "Flow In"
+    else:
+        first_target_ref = join_step_ref
+        preferred_input_name = "Subflow"
+    if first_target_ref is not None:
+        _extend_underlay_links_to_step_ref(
+            runner,
+            start_node,
+            "Subflow",
+            first_target_ref,
+            preferred_input_name,
+            str(getattr(join_node, "name", "") or "Subflow Join"),
+            ordered_links,
+            seen_links,
+        )
+    _collect_plan_active_underlay_links(
+        runner,
+        normalized_plan,
+        str(getattr(join_node, "name", "") or "Subflow Join"),
+        ordered_links,
+        seen_links,
+        exit_step_ref=join_step_ref,
+        exit_input_name="Subflow",
+    )
+
+
+def _collect_plan_active_underlay_links(
+    runner,
+    plan,
+    owner_node_name,
+    ordered_links,
+    seen_links,
+    *,
+    exit_step_ref=None,
+    exit_input_name="Flow In",
+):
+    normalized_plan = runner._normalize_local_segment_plan(plan)
+    step_refs = list(normalized_plan.get("step_refs", []) or [])
+    if not step_refs:
+        return
+
+    step_nodes = [runner._resolve_step_ref(step_ref, owner_node_name) for step_ref in step_refs]
+    branch_plans = dict(normalized_plan.get("branch_plans", {}) or {})
+    subflow_plans = dict(normalized_plan.get("subflow_plans", {}) or {})
+
+    for index, step_node in enumerate(step_nodes):
+        step_ref = step_refs[index]
+        group_path = list(step_ref.get("group_path", []) or [])
+        next_step_ref = step_refs[index + 1] if index + 1 < len(step_refs) else exit_step_ref
+        preferred_input_name = "Flow In" if index + 1 < len(step_refs) else exit_input_name
+        node_type = str(getattr(step_node, "bl_idname", "") or "")
+
+        if node_type == "AFNodeBranchStart":
+            trigger_state = _evaluate_underlay_trigger_state(runner, step_node, group_path)
+            branch_plan = branch_plans.get(index)
+            if trigger_state is not False and isinstance(branch_plan, dict):
+                _collect_branch_underlay_links(runner, step_node, branch_plan, ordered_links, seen_links)
+            if trigger_state is True:
+                break
+            if next_step_ref is not None:
+                _extend_underlay_links_to_step_ref(
+                    runner,
+                    step_node,
+                    "Flow Out",
+                    next_step_ref,
+                    preferred_input_name,
+                    owner_node_name,
+                    ordered_links,
+                    seen_links,
+                )
+            continue
+
+        if node_type == "AFNodeSubflowJoin":
+            trigger_state = _evaluate_underlay_trigger_state(runner, step_node, group_path)
+            subflow_plan = subflow_plans.get(index)
+            if trigger_state is not False and isinstance(subflow_plan, dict):
+                _collect_subflow_underlay_links(
+                    runner,
+                    step_node,
+                    step_ref,
+                    subflow_plan,
+                    ordered_links,
+                    seen_links,
+                )
+            if next_step_ref is not None:
+                _extend_underlay_links_to_step_ref(
+                    runner,
+                    step_node,
+                    "Flow Out",
+                    next_step_ref,
+                    preferred_input_name,
+                    owner_node_name,
+                    ordered_links,
+                    seen_links,
+                )
+            continue
+
+        if next_step_ref is None:
+            continue
+        _extend_underlay_links_to_step_ref(
+            runner,
+            step_node,
+            "Flow Out",
+            next_step_ref,
+            preferred_input_name,
+            owner_node_name,
+            ordered_links,
+            seen_links,
+        )
+
+
+def _collect_active_flow_links_from_context_items(context_items, node_tree, root_tree):
+    ordered_links = []
+    seen_links = set()
+    task_seen_outputs = set()
+    for context_data in list(context_items or []):
+        if not isinstance(context_data, dict):
+            continue
+        runner = context_data.get("runner")
+        plan = context_data.get("plan")
+        owner_node_name = str(context_data.get("owner_node_name", "") or "")
+        _append_underlay_links_from_context(context_data, ordered_links, seen_links)
+        if node_tree != root_tree or runner is None or not isinstance(plan, dict):
+            continue
+        task_contexts = []
+        _collect_active_task_underlay_contexts_from_plan(
+            runner,
+            node_tree,
+            plan,
+            owner_node_name,
+            task_contexts,
+            task_seen_outputs,
+        )
+        for task_context in task_contexts:
+            _append_underlay_links_from_context(task_context, ordered_links, seen_links)
+    return ordered_links
+
+
+def _active_flow_underlay_links(node_tree):
+    if node_tree is None:
+        return ()
+    scene = getattr(bpy.context, "scene", None)
+    root_tree = _node_editor_root_tree(bpy.context, node_tree)
+    if node_tree == root_tree and root_tree is not None:
+        cache_signature = (
+            "ROOT",
+            _cache_pointer_token(root_tree),
+            int(node_tree_runtime_revision(root_tree)),
+            _cache_pointer_token(scene),
+            int(getattr(scene, "frame_current", 0) or 0) if scene is not None else 0,
+            round(float(getattr(scene, "frame_subframe", 0.0) or 0.0), 6) if scene is not None else 0.0,
+            _root_underlay_contexts_signature(root_tree, scene),
+        )
+    else:
+        cache_signature = (
+            "VISIBLE",
+            _visible_underlay_context_signature(node_tree, root_tree, scene),
+        )
+
+    cache_key = _cache_pointer_token(node_tree)
+    cached = _FLOW_UNDERLAY_LINK_CACHE.get(cache_key)
+    if cached is not None and cached.get("signature") == cache_signature:
+        return cached.get("links", ())
+
+    context_items = []
+    try:
+        if node_tree == root_tree and root_tree is not None:
+            context_items = _build_root_underlay_contexts(root_tree, scene)
+        else:
+            context_data = _build_visible_underlay_context(node_tree)
+            if context_data is not None:
+                context_items = [context_data]
+    except Exception:
+        context_items = []
+
+    try:
+        active_links = _collect_active_flow_links_from_context_items(context_items, node_tree, root_tree)
+    except Exception:
+        active_links = []
+    active_links = tuple(active_links or ())
+    _FLOW_UNDERLAY_LINK_CACHE[cache_key] = {
+        "signature": cache_signature,
+        "links": active_links,
+    }
+    if len(_FLOW_UNDERLAY_LINK_CACHE) > 16:
+        stale_keys = [key for key in _FLOW_UNDERLAY_LINK_CACHE.keys() if key != cache_key]
+        for stale_key in stale_keys[:-8]:
+            _FLOW_UNDERLAY_LINK_CACHE.pop(stale_key, None)
+    return active_links
+
+
+def _flow_link_runtime_region_points(link, view2d, curving_factor, region):
+    link_points = _flow_toggle_link_runtime_region_points(link, view2d, curving_factor)
+    if not link_points or len(link_points) < 2:
+        return None
+    min_x = min(point[0] for point in link_points)
+    max_x = max(point[0] for point in link_points)
+    min_y = min(point[1] for point in link_points)
+    max_y = max(point[1] for point in link_points)
+    if (
+        max_x < -_FLOW_SOCKET_VIEWPORT_MARGIN
+        or min_x > float(region.width) + _FLOW_SOCKET_VIEWPORT_MARGIN
+        or max_y < -_FLOW_SOCKET_VIEWPORT_MARGIN
+        or min_y > float(region.height) + _FLOW_SOCKET_VIEWPORT_MARGIN
+    ):
+        return None
+    return link_points
 
 
 def _draw_flow_link_underlays(node_tree):
@@ -979,20 +1940,9 @@ def _draw_flow_link_underlays(node_tree):
     line_width = max(1.2, 1.75 * scale) * 6.0
     curving_factor = _flow_toggle_link_curving_factor()
 
-    for link in _flow_link_underlay_links(node_tree):
-        link_points = _flow_toggle_link_runtime_region_points(link, view2d, curving_factor)
-        if not link_points or len(link_points) < 2:
-            continue
-        min_x = min(point[0] for point in link_points)
-        max_x = max(point[0] for point in link_points)
-        min_y = min(point[1] for point in link_points)
-        max_y = max(point[1] for point in link_points)
-        if (
-            max_x < -_FLOW_SOCKET_VIEWPORT_MARGIN
-            or min_x > float(region.width) + _FLOW_SOCKET_VIEWPORT_MARGIN
-            or max_y < -_FLOW_SOCKET_VIEWPORT_MARGIN
-            or min_y > float(region.height) + _FLOW_SOCKET_VIEWPORT_MARGIN
-        ):
+    for link in _active_flow_underlay_links(node_tree):
+        link_points = _flow_link_runtime_region_points(link, view2d, curving_factor, region)
+        if link_points is None:
             continue
         _draw_polyline_strip(
             link_points,
@@ -1033,6 +1983,7 @@ def _custom_header_node_types():
     return {
         "AFNodeStart",
         "AFNodeFlowToggle",
+        "AFNodeTaskStatusOverride",
         "AFNodeRepeatStart",
         "AFNodeRepeatEnd",
         "AFNodeSubflowStart",
@@ -1054,6 +2005,8 @@ def _custom_header_node_types():
         "AFNodeEvaluateTaskDependencies",
         "AFNodeRunTaskPlan",
         "AFNodeRunBackgroundTaskPlan",
+        "AFNodeSetGeometryAttribute",
+        "AFNodePublishGeometryAttribute",
         "AFNodeCreatePropertyPackage",
         "AFNodeStorePropertyPackage",
         "AFNodeApplyObjectProperties",
@@ -1170,7 +2123,8 @@ def _draw_repeat_overlay():
         space = getattr(bpy.context, "space_data", None)
         node_tree = getattr(space, "edit_tree", None) if space is not None else None
         if node_tree is not None and getattr(node_tree, "bl_idname", "") == "AFNodeTreeType":
-            _draw_flow_link_underlays(node_tree)
+            if _ui_pref_enabled("show_custom_flow_links", True):
+                _draw_flow_link_underlays(node_tree)
             if _ui_pref_enabled("show_flow_zone_overlays", True):
                 for draw_item in _cached_overlay_pair_draw_items(node_tree):
                     hull = draw_item.get("hull", ())
@@ -1210,7 +2164,8 @@ def _draw_status_overlay():
                 _draw_flow_toggle_trigger_links(node_tree)
             if _ui_pref_enabled("show_custom_node_headers", True):
                 _draw_custom_math_header(node_tree)
-            _draw_flow_socket_endpoint_markers(node_tree)
+            if _ui_pref_enabled("show_custom_flow_sockets", True):
+                _draw_flow_socket_endpoint_markers(node_tree)
             if _ui_pref_enabled("show_run_mode_chip", True):
                 from .chips import _draw_run_mode_chip
 

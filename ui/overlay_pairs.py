@@ -1,7 +1,7 @@
 import math
 import time
 
-from ..runtime_flow.helpers import _find_single_from_input_socket, _first_output_node
+from ..runtime_flow.helpers import _find_single_from_input_socket, _first_output_node, _is_flow_side_hook_node
 from .overlay_drawing import _convex_hull, _inflate_polygon, _node_bounds, _paired_zone_node_bounds
 
 
@@ -15,6 +15,10 @@ _SUBFLOW_BRANCH_OVERLAY_FILL_COLOR = (0.20, 0.18, 0.42, 0.14)
 _SUBFLOW_BRANCH_OVERLAY_OUTLINE_COLOR = (0.46, 0.40, 0.86, 0.50)
 _OVERLAY_PAIR_PAD = 26.0
 _OVERLAY_NESTED_GAP = 12.0
+
+
+def _overlay_node_key(node):
+    return int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
 
 
 def _collect_forward_flow_nodes(start_node):
@@ -68,14 +72,6 @@ def _collect_reverse_flow_nodes(sink_node, flow_input_name, start_node_types, al
     return None, None
 
 
-def _collect_execution_overlay_pairs(node_tree):
-    return _collect_managed_overlay_pairs(node_tree, "EXECUTION", "AFNodeStart", "AFNodeEnd")
-
-
-def _collect_task_overlay_pairs(node_tree):
-    return _collect_managed_overlay_pairs(node_tree, "TASK", "AFNodeTaskStart", "AFNodeTaskOutput")
-
-
 def _collect_linear_flow_context(node):
     if node is None:
         return ()
@@ -89,7 +85,7 @@ def _collect_linear_flow_context(node):
             return ()
         visited.add(node_key)
         reverse_nodes.append(current)
-        input_name = "Trigger" if getattr(current, "bl_idname", "") == "AFNodeFlowToggle" else "Flow In"
+        input_name = "Trigger" if _is_flow_side_hook_node(current) else "Flow In"
         if input_name not in getattr(current, "inputs", {}):
             break
         current, _current_socket = _find_single_from_input_socket(current.inputs[input_name])
@@ -124,6 +120,23 @@ def _collect_pair_groups_by_id(node_tree, start_type, end_type):
     return grouped
 
 
+def _overlay_pair_anchor_node(pair):
+    pair_kind = str(pair.get("kind", "") or "")
+    if pair_kind == "SUBFLOW":
+        return pair.get("end_node")
+    if pair_kind == "BRANCH":
+        return pair.get("start_node")
+    return None
+
+
+def _overlay_pair_path_nodes(pair):
+    return tuple(pair.get("path_nodes", pair.get("nodes", ())) or ())
+
+
+def _overlay_pair_path_node_keys(pair):
+    return {_overlay_node_key(node) for node in _overlay_pair_path_nodes(pair)}
+
+
 def _paired_flow_context_nodes(start_node, end_node, nodes_module):
     if start_node is None or end_node is None:
         return ()
@@ -148,20 +161,17 @@ def _paired_flow_context_nodes(start_node, end_node, nodes_module):
 
 def _augment_parent_pair_nodes(parent_pair, child_pairs):
     parent_nodes = list(parent_pair.get("nodes", ()))
-    parent_keys = {
-        int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
-        for node in parent_nodes
-    }
+    parent_keys = {_overlay_node_key(node) for node in parent_nodes}
+    parent_path_keys = _overlay_pair_path_node_keys(parent_pair)
     for child in child_pairs:
-        child_kind = str(child.get("kind", ""))
-        anchor_node = child.get("end_node") if child_kind == "SUBFLOW" else child.get("start_node")
+        anchor_node = _overlay_pair_anchor_node(child)
         if anchor_node is None:
             continue
-        anchor_key = int(anchor_node.as_pointer()) if hasattr(anchor_node, "as_pointer") else id(anchor_node)
-        if anchor_key not in parent_keys:
+        anchor_key = _overlay_node_key(anchor_node)
+        if anchor_key not in parent_path_keys:
             continue
         for node in child.get("nodes", ()):
-            node_key = int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
+            node_key = _overlay_node_key(node)
             if node_key in parent_keys:
                 continue
             parent_nodes.append(node)
@@ -170,7 +180,7 @@ def _augment_parent_pair_nodes(parent_pair, child_pairs):
     return parent_pair
 
 
-def _collect_managed_overlay_pairs(node_tree, kind, start_type, end_type):
+def _collect_raw_managed_overlay_pairs(node_tree, kind, start_type, end_type):
     from .. import nodes as nodes_module
 
     pairs = []
@@ -184,16 +194,73 @@ def _collect_managed_overlay_pairs(node_tree, kind, start_type, end_type):
                 "kind": kind,
                 "start_node": start_node,
                 "end_node": end_node,
+                "path_nodes": _paired_flow_context_nodes(start_node, end_node, nodes_module),
                 "nodes": _paired_flow_context_nodes(start_node, end_node, nodes_module),
             }
         )
+    return pairs
 
-    if kind in {"EXECUTION", "TASK"}:
-        child_pairs = []
-        child_pairs.extend(_collect_managed_overlay_pairs(node_tree, "SUBFLOW", "AFNodeSubflowStart", "AFNodeSubflowJoin"))
-        child_pairs.extend(_collect_managed_overlay_pairs(node_tree, "BRANCH", "AFNodeBranchStart", "AFNodeBranchEnd"))
-        pairs = [_augment_parent_pair_nodes(dict(pair), child_pairs) for pair in pairs]
 
+def _complete_control_overlay_pair_nodes(pair, control_pairs, cache=None, visiting=None):
+    if cache is None:
+        cache = {}
+    if visiting is None:
+        visiting = set()
+    pair_key = _overlay_pair_key(pair)
+    cached_pair = cache.get(pair_key)
+    if cached_pair is not None:
+        return cached_pair
+    if pair_key in visiting:
+        return dict(pair)
+
+    visiting.add(pair_key)
+    completed_pair = dict(pair)
+    # Control pairs nest by anchors on the parent's own body path, not by the
+    # already-expanded node set that later hull and depth calculation consume.
+    completed_nodes = list(_overlay_pair_path_nodes(pair))
+    completed_node_keys = {_overlay_node_key(node) for node in completed_nodes}
+    pair_path_keys = _overlay_pair_path_node_keys(pair)
+    for candidate in control_pairs:
+        if candidate is pair:
+            continue
+        anchor_node = _overlay_pair_anchor_node(candidate)
+        if anchor_node is None:
+            continue
+        if _overlay_node_key(anchor_node) not in pair_path_keys:
+            continue
+        completed_child = _complete_control_overlay_pair_nodes(
+            candidate,
+            control_pairs,
+            cache=cache,
+            visiting=visiting,
+        )
+        for node in completed_child.get("nodes", ()):
+            node_key = _overlay_node_key(node)
+            if node_key in completed_node_keys:
+                continue
+            completed_nodes.append(node)
+            completed_node_keys.add(node_key)
+    completed_pair["nodes"] = tuple(completed_nodes)
+    cache[pair_key] = completed_pair
+    visiting.discard(pair_key)
+    return completed_pair
+
+
+def _collect_control_overlay_pairs(node_tree):
+    raw_pairs = []
+    raw_pairs.extend(_collect_raw_managed_overlay_pairs(node_tree, "SUBFLOW", "AFNodeSubflowStart", "AFNodeSubflowJoin"))
+    raw_pairs.extend(_collect_raw_managed_overlay_pairs(node_tree, "BRANCH", "AFNodeBranchStart", "AFNodeBranchEnd"))
+    cache = {}
+    return [
+        _complete_control_overlay_pair_nodes(pair, raw_pairs, cache=cache, visiting=set())
+        for pair in raw_pairs
+    ]
+
+
+def _collect_managed_overlay_pairs(node_tree, kind, start_type, end_type, child_pairs=None):
+    pairs = [dict(pair) for pair in _collect_raw_managed_overlay_pairs(node_tree, kind, start_type, end_type)]
+    if kind in {"EXECUTION", "TASK"} and child_pairs:
+        pairs = [_augment_parent_pair_nodes(pair, child_pairs) for pair in pairs]
     return pairs
 
 
@@ -201,29 +268,42 @@ def _collect_repeat_overlay_pairs(node_tree):
     return _collect_managed_overlay_pairs(node_tree, "REPEAT", "AFNodeRepeatStart", "AFNodeRepeatEnd")
 
 
-def _collect_subflow_overlay_pairs(node_tree):
-    return _collect_managed_overlay_pairs(node_tree, "SUBFLOW", "AFNodeSubflowStart", "AFNodeSubflowJoin")
+def _collect_execution_overlay_pairs(node_tree, control_pairs=None):
+    if control_pairs is None:
+        control_pairs = _collect_control_overlay_pairs(node_tree)
+    return _collect_managed_overlay_pairs(node_tree, "EXECUTION", "AFNodeStart", "AFNodeEnd", child_pairs=control_pairs)
 
 
-def _collect_branch_overlay_pairs(node_tree):
-    return _collect_managed_overlay_pairs(node_tree, "BRANCH", "AFNodeBranchStart", "AFNodeBranchEnd")
+def _collect_task_overlay_pairs(node_tree, control_pairs=None):
+    if control_pairs is None:
+        control_pairs = _collect_control_overlay_pairs(node_tree)
+    return _collect_managed_overlay_pairs(node_tree, "TASK", "AFNodeTaskStart", "AFNodeTaskOutput", child_pairs=control_pairs)
+
+
+def _collect_subflow_overlay_pairs(node_tree, control_pairs=None):
+    if control_pairs is None:
+        control_pairs = _collect_control_overlay_pairs(node_tree)
+    return [dict(pair) for pair in control_pairs if str(pair.get("kind", "")) == "SUBFLOW"]
+
+
+def _collect_branch_overlay_pairs(node_tree, control_pairs=None):
+    if control_pairs is None:
+        control_pairs = _collect_control_overlay_pairs(node_tree)
+    return [dict(pair) for pair in control_pairs if str(pair.get("kind", "")) == "BRANCH"]
 
 
 def _overlay_pair_key(pair):
     start_node = pair["start_node"]
     end_node = pair["end_node"]
     return (
-        int(start_node.as_pointer()) if hasattr(start_node, "as_pointer") else id(start_node),
-        int(end_node.as_pointer()) if hasattr(end_node, "as_pointer") else id(end_node),
+        _overlay_node_key(start_node),
+        _overlay_node_key(end_node),
         str(pair.get("kind", "")),
     )
 
 
 def _overlay_pair_node_keys(pair):
-    return {
-        int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
-        for node in pair.get("nodes", ())
-    }
+    return {_overlay_node_key(node) for node in pair.get("nodes", ())}
 
 
 def _pair_hull(pair_nodes, pad=_OVERLAY_PAIR_PAD):

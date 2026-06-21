@@ -109,6 +109,7 @@ def _make_entry(task_plan, title):
         "status": "PENDING",
         "step_started": False,
         "repeat_states": {},
+        "runtime_status_override": "",
         "from_node": None,
         "from_socket": None,
         "enabled_index": 1,
@@ -267,6 +268,7 @@ try:
         "skipped_count": 0,
         "failure_policy": "STOP_ON_FAILURE",
         "first_failure": None,
+        "active_entry_index": -1,
     }
     events = []
     started_step_key = ""

@@ -179,15 +179,19 @@ class RuntimeLinksMixin:
 
         from_node = resolved_node
         from_socket = resolved_socket
+        force_fresh_data_eval = str(getattr(from_node, "bl_idname", "") or "") in {
+            "AFNodeStatusInput",
+        }
 
         if from_node.bl_idname == "NodeGroupInput":
             default_value = self._resolve_group_input_default_output(from_node, from_socket, output_key, active_group_path)
             if default_value is not GROUP_INPUT_DEFAULT_MISSING:
                 return default_value
 
-        value = self._resolve_output_value(from_node, from_socket, output_key, active_group_path)
-        if value is not None:
-            return value
+        if not force_fresh_data_eval:
+            value = self._resolve_output_value(from_node, from_socket, output_key, active_group_path)
+            if value is not None:
+                return value
 
         if output_key == "property_assignment":
             definition_value = self._resolve_output_value(from_node, from_socket, "property_definition", active_group_path)

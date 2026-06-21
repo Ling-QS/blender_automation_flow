@@ -42,11 +42,9 @@ class RuntimeDisplayMixin:
         self._auto_follow_tick_step_refs = []
         self._auto_follow_tick_step_keys = set()
 
-    def _record_auto_follow_tick_node(self, node, group_path=None):
-        if not self.auto_follow or node is None:
+    def _record_auto_follow_tick_step_ref(self, step_ref):
+        if not self.auto_follow or not isinstance(step_ref, dict):
             return
-        active_group_path = list(self.current_group_path if group_path is None else group_path)
-        step_ref = self._make_step_ref(node, active_group_path)
         step_key = (
             str(step_ref.get("tree_name", "") or ""),
             str(step_ref.get("node_name", "") or ""),
@@ -56,6 +54,30 @@ class RuntimeDisplayMixin:
             return
         self._auto_follow_tick_step_keys.add(step_key)
         self._auto_follow_tick_step_refs.append(step_ref)
+
+    def _record_auto_follow_tick_node(self, node, group_path=None):
+        if not self.auto_follow or node is None:
+            return
+        active_group_path = list(self.current_group_path if group_path is None else group_path)
+        for depth, group_step_ref in enumerate(active_group_path, 1):
+            if not isinstance(group_step_ref, dict):
+                continue
+            group_record = {
+                "tree_name": str(group_step_ref.get("tree_name", "") or ""),
+                "node_name": str(group_step_ref.get("node_name", "") or ""),
+            }
+            parent_group_path = [
+                {
+                    "tree_name": str(item.get("tree_name", "") or ""),
+                    "node_name": str(item.get("node_name", "") or ""),
+                }
+                for item in active_group_path[: depth - 1]
+                if isinstance(item, dict)
+            ]
+            if parent_group_path:
+                group_record["group_path"] = parent_group_path
+            self._record_auto_follow_tick_step_ref(group_record)
+        self._record_auto_follow_tick_step_ref(self._make_step_ref(node, active_group_path))
 
     def _commit_auto_follow_tick_highlight(self, hold_seconds=0.18):
         if not self.auto_follow:

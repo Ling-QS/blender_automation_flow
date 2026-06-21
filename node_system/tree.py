@@ -9,6 +9,7 @@ _GROUP_TREE_SYNC_RETRY_COUNTS = {}
 _GROUP_TREE_SYNC_TIMER_ACTIVE = False
 _GROUP_NODE_CONSISTENCY_TIMER_ACTIVE = False
 _SYNC_SUSPENDED = False
+_TREE_RUNTIME_REVISIONS = {}
 _AUTO_CAST_LINK_DEPTH = 0
 _REROUTE_DEFAULT_SOCKET = "NodeSocketColor"
 _INVALID_SOCKET_IDNAMES = {"", "NodeSocketVirtual", "NodeSocketUndefined"}
@@ -77,6 +78,30 @@ def resume_runtime_sync():
 
 def _runtime_sync_enabled():
     return not _SYNC_SUSPENDED
+
+
+def _tree_runtime_revision_key(node_tree):
+    if node_tree is None:
+        return None
+    return int(node_tree.as_pointer()) if hasattr(node_tree, "as_pointer") else id(node_tree)
+
+
+def _touch_tree_runtime_revision(node_tree):
+    cache_key = _tree_runtime_revision_key(node_tree)
+    if cache_key is None:
+        return
+    _TREE_RUNTIME_REVISIONS[cache_key] = int(_TREE_RUNTIME_REVISIONS.get(cache_key, 0)) + 1
+    if len(_TREE_RUNTIME_REVISIONS) > 256:
+        stale_keys = [key for key in _TREE_RUNTIME_REVISIONS.keys() if key != cache_key]
+        for stale_key in stale_keys[:-128]:
+            _TREE_RUNTIME_REVISIONS.pop(stale_key, None)
+
+
+def node_tree_runtime_revision(node_tree):
+    cache_key = _tree_runtime_revision_key(node_tree)
+    if cache_key is None:
+        return 0
+    return int(_TREE_RUNTIME_REVISIONS.get(cache_key, 0) or 0)
 
 
 def _link_is_valid(link):
@@ -288,6 +313,7 @@ def _sync_dynamic_node_inputs(node_tree):
     run_background_task_plan_sync_fn = getattr(nodes_module, "_sync_run_background_task_plan_sockets", None)
     index_switch_sync_fn = getattr(nodes_module, "_sync_index_switch_sockets", None)
     preview_data_sync_fn = getattr(nodes_module, "_sync_preview_data_sockets", None)
+    parse_property_package_sync_fn = getattr(nodes_module, "_sync_parse_property_package_sockets", None)
     hide_report_outputs_fn = getattr(nodes_module, "_hide_report_outputs", None)
     if (
         sync_fn is None
@@ -302,6 +328,7 @@ def _sync_dynamic_node_inputs(node_tree):
         and run_background_task_plan_sync_fn is None
         and index_switch_sync_fn is None
         and preview_data_sync_fn is None
+        and parse_property_package_sync_fn is None
         and hide_report_outputs_fn is None
     ):
         return
@@ -357,6 +384,11 @@ def _sync_dynamic_node_inputs(node_tree):
         if getattr(node, "bl_idname", "") == "AFNodePreviewData" and preview_data_sync_fn is not None:
             try:
                 preview_data_sync_fn(node)
+            except Exception:
+                pass
+        if getattr(node, "bl_idname", "") == "AFNodeParsePropertyPackage" and parse_property_package_sync_fn is not None:
+            try:
+                parse_property_package_sync_fn(node)
             except Exception:
                 pass
         if getattr(node, "bl_idname", "") in {"AFNodeRenderTarget", "AFNodeRenderTask"} and render_target_sync_fn is not None:
@@ -775,6 +807,7 @@ class AFNodeTree(bpy.types.NodeTree):
         return str(socket_type) in valid_custom or str(socket_type) in valid_builtin
 
     def update(self):
+        _touch_tree_runtime_revision(self)
         if not _runtime_sync_enabled():
             return
         try:
@@ -797,6 +830,7 @@ class AFNodeTree(bpy.types.NodeTree):
 
     def interface_update(self, context):
         del context
+        _touch_tree_runtime_revision(self)
         if not _runtime_sync_enabled():
             return
         try:
@@ -818,6 +852,7 @@ class AFNodeTree(bpy.types.NodeTree):
         _queue_group_tree_sync(self)
 
     def insert_link(self, link):
+        _touch_tree_runtime_revision(self)
         if not _runtime_sync_enabled():
             return
         if link is None:

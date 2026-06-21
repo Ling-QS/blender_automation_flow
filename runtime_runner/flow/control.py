@@ -3,6 +3,14 @@ from ...runtime_flow.helpers import _flow_trigger_output_nodes
 
 
 class RuntimeFlowControlMixin:
+    def _execute_flow_side_hook(self, node):
+        node_type = str(getattr(node, "bl_idname", "") or "")
+        if node_type == "AFNodeFlowToggle":
+            return self._execute_flow_toggle(node)
+        if node_type == "AFNodeTaskStatusOverride":
+            return self._execute_task_status_override(node)
+        raise FlowExecutionError("AF_E009", f"Unsupported flow side-hook type: {node_type}", getattr(node, "name", ""))
+
     def _execute_attached_flow_triggers(self, source_node, output_name="Flow Out", group_path=None):
         if source_node is None:
             return 0
@@ -16,7 +24,7 @@ class RuntimeFlowControlMixin:
         try:
             for trigger_node in trigger_nodes:
                 self.current_group_path = list(active_group_path)
-                _result, payload = self._execute_flow_toggle(trigger_node)
+                _result, payload = self._execute_flow_side_hook(trigger_node)
                 payload_for_log = payload
                 if payload_for_log is not None:
                     self.log(
@@ -37,6 +45,28 @@ class RuntimeFlowControlMixin:
             self.current_group_path = previous_group_path
         return triggered_count
 
+    def _flow_trigger_output_names_after_node(self, node, control_payload=None):
+        if node is None:
+            return ("Flow Out",)
+        node_type = str(getattr(node, "bl_idname", "") or "")
+        if node_type == "AFNodeBranchStart":
+            if isinstance(control_payload, dict) and bool(control_payload.get("branch_triggered", False)):
+                return ()
+            return ("Flow Out",)
+        return ("Flow Out",)
+
+    def _execute_post_node_flow_triggers(self, node, control_payload=None, group_path=None):
+        triggered_count = 0
+        for output_name in self._flow_trigger_output_names_after_node(node, control_payload):
+            triggered_count += int(
+                self._execute_attached_flow_triggers(
+                    node,
+                    output_name=output_name,
+                    group_path=group_path,
+                )
+            )
+        return triggered_count
+
     def _runtime_control_payload(self, cursor_override, count_step=False, log_payload=None, **extra):
         payload = {
             "__af_runtime_control__": True,
@@ -46,6 +76,107 @@ class RuntimeFlowControlMixin:
         }
         payload.update(dict(extra or {}))
         return payload
+
+    def _execute_local_flow_segment(self, owner_node, segment_plan, segment_label):
+        normalized_plan = self._normalize_local_segment_plan(segment_plan)
+        step_refs = list(normalized_plan.get("step_refs", []) or [])
+        local_nodes = [self._resolve_step_ref(step_ref, owner_node.name) for step_ref in step_refs]
+        previous_nodes_in_order = self.nodes_in_order
+        previous_group_paths_in_order = getattr(self, "node_group_paths_in_order", [])
+        previous_cursor = int(self.cursor)
+        previous_group_path = list(self.current_group_path)
+        previous_repeat_pairs = self.flow_repeat_pairs
+        previous_repeat_states = self.flow_repeat_states
+        previous_subflow_plans = self.flow_subflow_plans
+        previous_branch_plans = self.flow_branch_plans
+        previous_pending_branch_failure = self.pending_branch_failure
+        executed_steps = 0
+        self.nodes_in_order = list(local_nodes)
+        self.node_group_paths_in_order = [
+            [dict(item) for item in list(step_ref.get("group_path", []) or []) if isinstance(item, dict)]
+            for step_ref in step_refs
+        ]
+        self.cursor = 0
+        self.flow_repeat_pairs = self._normalize_repeat_pairs(normalized_plan.get("repeat_pairs", {}))
+        self.flow_repeat_states = {}
+        self.flow_subflow_plans = self._normalize_indexed_local_plans(normalized_plan.get("subflow_plans", {}))
+        self.flow_branch_plans = self._normalize_indexed_local_plans(normalized_plan.get("branch_plans", {}))
+        try:
+            while self.cursor < len(self.nodes_in_order):
+                step_node = self.nodes_in_order[self.cursor]
+                step_ref = step_refs[self.cursor]
+                step_tree_name = getattr(getattr(step_node, "id_data", None), "name", self.node_tree.name)
+                self.current_group_path = list(step_ref.get("group_path", []))
+                self._set_current_node(step_node)
+                self.log("INFO", f"{segment_label}_STEP_STARTED [{owner_node.name}]", step_node.name, step_tree_name)
+                completed_before_step = int(self.completed_step_count)
+                try:
+                    result, payload = self._execute_node(step_node)
+                except FlowExecutionError as exc:
+                    if self._handoff_failure_to_branch(step_node, exc, step_tree_name):
+                        continue
+                    raise
+                except Exception as exc:
+                    wrapped = FlowExecutionError(
+                        "AF_E999",
+                        str(exc),
+                        step_node.name,
+                        step_tree_name,
+                        step_ref.get("group_path", []),
+                    )
+                    if self._handoff_failure_to_branch(step_node, wrapped, step_tree_name):
+                        continue
+                    raise wrapped
+
+                if result == FLOW_WAIT:
+                    raise FlowExecutionError(
+                        "AF_E020",
+                        f"{segment_label.title()} does not support waiting nodes",
+                        step_node.name,
+                        step_tree_name,
+                        step_ref.get("group_path", []),
+                    )
+                if result == FLOW_YIELD:
+                    raise FlowExecutionError(
+                        "AF_E020",
+                        f"{segment_label.title()} does not support yielding nodes",
+                        step_node.name,
+                        step_tree_name,
+                        step_ref.get("group_path", []),
+                    )
+
+                control_payload = payload if isinstance(payload, dict) and payload.get("__af_runtime_control__") else None
+                self._record_auto_follow_tick_node(step_node, group_path=step_ref.get("group_path", []))
+                payload_for_log = control_payload.get("log_payload") if control_payload is not None else payload
+                if payload_for_log is not None:
+                    self.log("INFO", f"{segment_label}_STEP_DONE [{owner_node.name}] ({payload_for_log})", step_node.name, step_tree_name)
+                else:
+                    self.log("INFO", f"{segment_label}_STEP_DONE [{owner_node.name}]", step_node.name, step_tree_name)
+                self._mark_node_finished(
+                    step_node,
+                    count_step=bool(control_payload.get("count_step", True)) if control_payload is not None else True,
+                )
+                self._execute_post_node_flow_triggers(
+                    step_node,
+                    control_payload=control_payload,
+                    group_path=step_ref.get("group_path", []),
+                )
+                executed_steps += max(0, int(self.completed_step_count) - completed_before_step)
+                if control_payload is not None and "cursor_override" in control_payload:
+                    self.cursor = int(control_payload["cursor_override"])
+                else:
+                    self.cursor += 1
+        finally:
+            self.pending_branch_failure = previous_pending_branch_failure
+            self.flow_branch_plans = previous_branch_plans
+            self.flow_subflow_plans = previous_subflow_plans
+            self.flow_repeat_states = previous_repeat_states
+            self.flow_repeat_pairs = previous_repeat_pairs
+            self.current_group_path = previous_group_path
+            self.cursor = previous_cursor
+            self.node_group_paths_in_order = previous_group_paths_in_order
+            self.nodes_in_order = previous_nodes_in_order
+        return executed_steps
 
     def _execute_flow_repeat_start(self, node):
         repeat_info = self.flow_repeat_pairs.get(self.cursor)
@@ -89,6 +220,14 @@ class RuntimeFlowControlMixin:
         )
         return FLOW_OK, toggled_value
 
+    def _execute_task_status_override(self, node):
+        status_value = str(self._input_string(node, "Status", "") or "")
+        normalized_status = self._normalize_task_plan_final_status(status_value)
+        applied = bool(self._write_task_plan_runtime_status_override(normalized_status))
+        if applied:
+            return FLOW_OK, normalized_status or "CLEARED"
+        return FLOW_OK, "NOOP"
+
     def _execute_flow_repeat_end(self, node):
         repeat_info = self.flow_repeat_pairs.get(self.cursor)
         if repeat_info is None:
@@ -110,8 +249,8 @@ class RuntimeFlowControlMixin:
         return FLOW_OK, self._runtime_control_payload(self.cursor + 1, count_step=False, log_payload="DONE")
 
     def _execute_flow_subflow_join(self, node):
-        subflow_plan = self.flow_subflow_plans.get(self.cursor)
-        if subflow_plan is None:
+        subflow_plan = self._normalize_local_segment_plan(self.flow_subflow_plans.get(self.cursor, {}))
+        if not subflow_plan:
             raise FlowExecutionError("AF_E009", "Subflow Join is missing compiled subflow metadata", node.name)
 
         force_trigger = self._node_identity(node) in self.isolated_subflow_join_keys
@@ -130,31 +269,17 @@ class RuntimeFlowControlMixin:
             self.log("INFO", f"SUBFLOW_SKIPPED [{node.name}]", node.name)
             return FLOW_OK, "SKIPPED"
 
+        start_node = self._find_subflow_start_for_join(node)
+        if start_node is not None:
+            self._execute_attached_flow_triggers(
+                start_node,
+                output_name="Subflow",
+                group_path=list(self.current_group_path),
+            )
+
         step_refs = list(subflow_plan.get("step_refs", []) or [])
-        executed_steps = 0
-        self.log("INFO", f"SUBFLOW_STARTED [{node.name}] {len(step_refs)} step(s)", node.name)
-        for step_ref in step_refs:
-            step_node = self._resolve_step_ref(step_ref, node.name)
-            step_tree_name = getattr(getattr(step_node, "id_data", None), "name", self.node_tree.name)
-            self.current_group_path = list(step_ref.get("group_path", []))
-            self._set_current_node(step_node)
-            self.log("INFO", f"SUBFLOW_STEP_STARTED [{node.name}]", step_node.name, step_tree_name)
-            result, payload = self._execute_node(step_node)
-            if result == FLOW_WAIT:
-                raise FlowExecutionError("AF_E020", "Subflow does not support waiting nodes", step_node.name, step_tree_name, step_ref.get("group_path", []))
-            if result == FLOW_YIELD:
-                raise FlowExecutionError("AF_E020", "Subflow does not support yielding nodes", step_node.name, step_tree_name, step_ref.get("group_path", []))
-            control_payload = payload if isinstance(payload, dict) and payload.get("__af_runtime_control__") else None
-            if control_payload is not None:
-                raise FlowExecutionError("AF_E020", "Subflow does not support nested flow control nodes", step_node.name, step_tree_name, step_ref.get("group_path", []))
-            payload_for_log = payload
-            if payload_for_log is not None:
-                self.log("INFO", f"SUBFLOW_STEP_DONE [{node.name}] ({payload_for_log})", step_node.name, step_tree_name)
-            else:
-                self.log("INFO", f"SUBFLOW_STEP_DONE [{node.name}]", step_node.name, step_tree_name)
-            self._mark_node_finished(step_node)
-            self._execute_attached_flow_triggers(step_node, group_path=step_ref.get("group_path", []))
-            executed_steps += 1
+        self.log("INFO", f"SUBFLOW_STARTED [{node.name}] {int(subflow_plan.get('step_count', len(step_refs)))} step(s)", node.name)
+        executed_steps = self._execute_local_flow_segment(node, subflow_plan, "SUBFLOW")
 
         report = {
             "triggered": True,
@@ -170,8 +295,8 @@ class RuntimeFlowControlMixin:
         return FLOW_OK, executed_steps
 
     def _execute_flow_branch_start(self, node):
-        branch_plan = self.flow_branch_plans.get(self.cursor)
-        if branch_plan is None:
+        branch_plan = self._normalize_local_segment_plan(self.flow_branch_plans.get(self.cursor, {}))
+        if not branch_plan:
             raise FlowExecutionError("AF_E009", "Branch Start is missing compiled branch metadata", node.name)
 
         force_trigger = self._node_identity(node) in self.isolated_branch_start_keys
@@ -194,69 +319,27 @@ class RuntimeFlowControlMixin:
             )
 
         step_refs = list(branch_plan.get("step_refs", []) or [])
-        executed_steps = 0
         self.pending_branch_failure = None
         if pending_failure is not None:
             self.log("INFO", f"BRANCH_HANDLING_FAILURE [{node.name}] {pending_failure.get('code', 'AF_E010')}", node.name)
         else:
             self.log("INFO", f"BRANCH_STARTED [{node.name}]", node.name)
-        for step_ref in step_refs:
-            step_node = self._resolve_step_ref(step_ref, node.name)
-            step_tree_name = getattr(getattr(step_node, "id_data", None), "name", self.node_tree.name)
-            self.current_group_path = list(step_ref.get("group_path", []))
-            self._set_current_node(step_node)
-            self.log("INFO", f"BRANCH_STEP_STARTED [{node.name}]", step_node.name, step_tree_name)
-            result, payload = self._execute_node(step_node)
-            if result == FLOW_WAIT:
-                raise FlowExecutionError("AF_E020", "Branch does not support waiting nodes", step_node.name, step_tree_name, step_ref.get("group_path", []))
-            if result == FLOW_YIELD:
-                raise FlowExecutionError("AF_E020", "Branch does not support yielding nodes", step_node.name, step_tree_name, step_ref.get("group_path", []))
-            control_payload = payload if isinstance(payload, dict) and payload.get("__af_runtime_control__") else None
-            if control_payload is not None:
-                raise FlowExecutionError("AF_E020", "Branch does not support nested flow control nodes", step_node.name, step_tree_name, step_ref.get("group_path", []))
-            payload_for_log = payload
-            if payload_for_log is not None:
-                self.log("INFO", f"BRANCH_STEP_DONE [{node.name}] ({payload_for_log})", step_node.name, step_tree_name)
-            else:
-                self.log("INFO", f"BRANCH_STEP_DONE [{node.name}]", step_node.name, step_tree_name)
-            self._mark_node_finished(step_node)
-            self._execute_attached_flow_triggers(step_node, group_path=step_ref.get("group_path", []))
-            executed_steps += 1
+        self._execute_attached_flow_triggers(
+            node,
+            output_name="Branch Flow",
+            group_path=list(self.current_group_path),
+        )
+        executed_steps = self._execute_local_flow_segment(node, branch_plan, "BRANCH")
 
         self.current_group_path = []
         self._set_current_node(node)
         self.log("INFO", f"BRANCH_DONE [{node.name}] {executed_steps} step(s)", node.name)
-        branch_status_override = ""
-        end_node = None
-        end_ref = dict(branch_plan.get("end_ref", {}) or {})
-        if end_ref:
-            try:
-                end_node = self._resolve_step_ref(end_ref, node.name)
-            except Exception:
-                end_node = None
-        if end_node is None:
-            end_node_name = str(branch_plan.get("end_node_name", "") or "")
-            if end_node_name:
-                end_node = getattr(self.node_tree, "nodes", None).get(end_node_name) if getattr(self.node_tree, "nodes", None) is not None else None
-        if end_node is not None and str(getattr(end_node, "bl_idname", "") or "") == "AFNodeBranchEnd":
-            try:
-                previous_group_path = list(self.current_group_path)
-                try:
-                    self.current_group_path = list(end_ref.get("group_path", [])) if end_ref else []
-                    branch_status_override = self._normalize_task_plan_final_status(
-                        str(self._input_string(end_node, "Status", "") or "").strip()
-                    )
-                finally:
-                    self.current_group_path = previous_group_path
-            except Exception:
-                branch_status_override = ""
         return FLOW_OK, self._runtime_control_payload(
             len(self.nodes_in_order),
             count_step=False,
             log_payload="BRANCHED",
             branch_triggered=True,
             executed_steps=int(executed_steps),
-            branch_status_override=branch_status_override,
         )
 
 

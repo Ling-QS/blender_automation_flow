@@ -12,6 +12,23 @@ from ...runtime_task_ref.refs import _invalid_task_ref_issue
 
 
 class RuntimeNodePrecheckMixin:
+    def _precheck_local_segment_plan(self, plan, owner_node_name):
+        issues = []
+        normalized_plan = self._normalize_local_segment_plan(plan)
+        for step_ref in list(normalized_plan.get("step_refs", []) or []):
+            try:
+                step_node = self._resolve_step_ref(step_ref, owner_node_name)
+            except FlowExecutionError as exc:
+                issues.append(_make_issue(exc.code, exc.message, exc.node_name or owner_node_name))
+                continue
+            previous_group_path = list(self.current_group_path)
+            self.current_group_path = list(step_ref.get("group_path", []))
+            try:
+                issues.extend(self._precheck_node(step_node))
+            finally:
+                self.current_group_path = previous_group_path
+        return issues
+
     def _precheck_node(self, node):
         issues = []
         node_type = node.bl_idname
@@ -28,7 +45,8 @@ class RuntimeNodePrecheckMixin:
             return issues
         if node_type == "AFNodeSubflowJoin":
             try:
-                self._compile_subflow_step_refs(node, node.name)
+                plan = self._compile_subflow_step_refs(node, node.name)
+                issues.extend(self._precheck_local_segment_plan(plan, node.name))
             except FlowExecutionError as exc:
                 issues.append(_make_issue(exc.code, exc.message, exc.node_name or node.name))
             return issues
@@ -41,6 +59,8 @@ class RuntimeNodePrecheckMixin:
                 plan = self._compile_branch_step_refs(end_node, node.name)
                 if str(plan.get("start_node_name", "") or "") != str(getattr(node, "name", "") or ""):
                     issues.append(_make_issue("AF_E009", "Branch End cannot reach matching Branch Start", end_node.name))
+                else:
+                    issues.extend(self._precheck_local_segment_plan(plan, node.name))
             except FlowExecutionError as exc:
                 issues.append(_make_issue(exc.code, exc.message, exc.node_name or node.name))
             return issues
@@ -53,6 +73,8 @@ class RuntimeNodePrecheckMixin:
                 plan = self._compile_branch_step_refs(node, node.name)
                 if str(plan.get("start_node_name", "") or "") != str(getattr(start_node, "name", "") or ""):
                     issues.append(_make_issue("AF_E009", "Branch End cannot reach matching Branch Start", node.name))
+                else:
+                    issues.extend(self._precheck_local_segment_plan(plan, node.name))
             except FlowExecutionError as exc:
                 issues.append(_make_issue(exc.code, exc.message, exc.node_name or node.name))
             return issues
@@ -178,18 +200,7 @@ class RuntimeNodePrecheckMixin:
                 if task_plan is None:
                     issues.append(_make_issue("AF_E011", f"{entry['title']} is not linked to a valid Task Plan", node.name))
                     continue
-                for step_ref in entry.get("step_refs", []):
-                    try:
-                        step_node = self._resolve_step_ref(step_ref, node.name)
-                    except FlowExecutionError as exc:
-                        issues.append(_make_issue(exc.code, exc.message, node.name))
-                        continue
-                    previous_group_path = list(self.current_group_path)
-                    self.current_group_path = list(step_ref.get("group_path", []))
-                    try:
-                        issues.extend(self._precheck_node(step_node))
-                    finally:
-                        self.current_group_path = previous_group_path
+                issues.extend(self._precheck_local_segment_plan(task_plan, node.name))
         elif node_type == "AFNodeGroup":
             if getattr(node, "group_tree", None) is None:
                 issues.append(_make_issue("AF_E030", "Group tree is missing", node.name))

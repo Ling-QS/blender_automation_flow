@@ -174,5 +174,30 @@ class RuntimeIdentityMixin:
             return None
         return flow_sockets[0]
 
+    def _find_group_flow_socket_nodes(self, group_tree, node_type, socket_collection_name):
+        matches = []
+        for node in self._find_task_group_nodes(group_tree, node_type):
+            flow_socket = self._find_single_group_flow_socket(node, socket_collection_name)
+            if flow_socket is None:
+                continue
+            matches.append((node, flow_socket))
+        return matches
+
+    def _flow_group_path_at(self, index):
+        try:
+            parsed_index = int(index)
+        except Exception:
+            return []
+        group_paths = getattr(self, "node_group_paths_in_order", None)
+        if not isinstance(group_paths, list):
+            return []
+        if parsed_index < 0 or parsed_index >= len(group_paths):
+            return []
+        return [
+            dict(item)
+            for item in list(group_paths[parsed_index] or [])
+            if isinstance(item, dict)
+        ]
+
 
 __all__ = ["RuntimeIdentityMixin"]

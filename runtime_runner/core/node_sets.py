@@ -77,6 +77,8 @@ DATA_NODE_TYPES = {
 }
 
 TASK_PLAN_STEP_TYPES = {
+    "AFNodeSetGeometryAttribute",
+    "AFNodePublishGeometryAttribute",
     "AFNodeSetActiveCamera",
     "AFNodeTaskStep",
     "AFNodeRepeatStart",
@@ -108,8 +110,6 @@ AUTO_FOLLOW_UNSUPPORTED_NODE_TYPES = {
 
 SUBFLOW_UNSUPPORTED_NODE_TYPES = {
     "AFNodeSubflowStart",
-    "AFNodeSubflowJoin",
-    "AFNodeBranchStart",
     "AFNodeBranchEnd",
     "AFNodeRepeatStart",
     "AFNodeRepeatEnd",
@@ -122,10 +122,8 @@ SUBFLOW_UNSUPPORTED_NODE_TYPES = {
 }
 
 BRANCH_UNSUPPORTED_NODE_TYPES = {
-    "AFNodeBranchStart",
     "AFNodeBranchEnd",
     "AFNodeSubflowStart",
-    "AFNodeSubflowJoin",
     "AFNodeRepeatStart",
     "AFNodeRepeatEnd",
     "AFNodeRunTaskPlan",

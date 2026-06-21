@@ -21,6 +21,8 @@ def build_context_geometry_node_classes(
 ):
     sample_object_index_sync_guard = set()
     context_reduce_sync_guard = set()
+    set_geometry_attribute_sync_guard = set()
+    publish_geometry_attribute_sync_guard = set()
 
     def _sample_object_index_socket_idname_for_mode(mode):
         return SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE.get(str(mode), "NodeSocketFloat")
@@ -131,6 +133,55 @@ def build_context_geometry_node_classes(
                 element_index_socket.default_value = max(0, int(getattr(element_index_socket, "default_value", 0)))
             except Exception:
                 pass
+
+    def _sync_set_geometry_attribute_node_sockets(node):
+        node_key = int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
+        if node_key in set_geometry_attribute_sync_guard:
+            return
+        set_geometry_attribute_sync_guard.add(node_key)
+        try:
+            value_mode = str(getattr(node, "value_type", "FLOAT") or "FLOAT")
+            value_socket_idname = GEOMETRY_ATTRIBUTE_OUTPUT_SOCKET_BY_MODE.get(value_mode, "NodeSocketFloat")
+            input_specs = (
+                ("AFSocketFlow", "Flow In"),
+                ("AFSocketObjectList", "Object List"),
+                (value_socket_idname, "Value"),
+            )
+            output_specs = (
+                ("AFSocketFlow", "Flow Out"),
+                ("AFSocketReport", "Report"),
+            )
+            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
+            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
+            if input_signature != input_specs or output_signature != output_specs:
+                _rebuild_sockets(node, input_specs, output_specs)
+        finally:
+            set_geometry_attribute_sync_guard.discard(node_key)
+
+    def _sync_publish_geometry_attribute_node_sockets(node):
+        node_key = int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
+        if node_key in publish_geometry_attribute_sync_guard:
+            return
+        publish_geometry_attribute_sync_guard.add(node_key)
+        try:
+            value_mode = str(getattr(node, "value_type", "FLOAT") or "FLOAT")
+            value_socket_idname = GEOMETRY_ATTRIBUTE_OUTPUT_SOCKET_BY_MODE.get(value_mode, "NodeSocketFloat")
+            input_specs = (
+                ("AFSocketFlow", "Flow In"),
+                ("AFSocketObjectList", "Object List"),
+                (value_socket_idname, "Value"),
+            )
+            output_specs = (
+                ("AFSocketFlow", "Flow Out"),
+                ("AFSocketObjectList", "Carrier Object"),
+                ("AFSocketReport", "Report"),
+            )
+            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
+            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
+            if input_signature != input_specs or output_signature != output_specs:
+                _rebuild_sockets(node, input_specs, output_specs)
+        finally:
+            publish_geometry_attribute_sync_guard.discard(node_key)
 
     class AFNodePropertyContext(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodePropertyContext"
@@ -260,13 +311,87 @@ def build_context_geometry_node_classes(
         def update(self):
             self._sync_sockets()
 
+    class AFNodeSetGeometryAttribute(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeSetGeometryAttribute"
+        bl_label = "Set Geometry Attribute"
+        bl_icon = "BLANK1"
+
+        target_object: bpy.props.PointerProperty(type=bpy.types.Object)
+        attribute_name: bpy.props.StringProperty(name="Attribute Name", default="")
+        value_type: bpy.props.EnumProperty(
+            name="Value Type",
+            items=GEOMETRY_ATTRIBUTE_VALUE_TYPE_ITEMS,
+            default="FLOAT",
+            update=lambda self, context: self._sync_sockets(),
+        )
+
+        def init(self, context):
+            del context
+            self._sync_sockets()
+            _set_default_node_width(self)
+            _set_node_color(self, "GEOMETRY")
+            _hide_default_auxiliary_outputs(self)
+
+        def draw_buttons(self, context, layout):
+            del context
+            layout.prop(self, "target_object", text="Target Object")
+            layout.prop(self, "attribute_name", text="Attribute")
+            layout.prop(self, "value_type", text="")
+
+        def _sync_sockets(self):
+            _sync_set_geometry_attribute_node_sockets(self)
+            _hide_default_auxiliary_outputs(self)
+
+        def update(self):
+            self._sync_sockets()
+
+    class AFNodePublishGeometryAttribute(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodePublishGeometryAttribute"
+        bl_label = "Publish Geometry Attribute"
+        bl_icon = "BLANK1"
+
+        carrier_object: bpy.props.PointerProperty(type=bpy.types.Object)
+        attribute_name: bpy.props.StringProperty(name="Attribute Name", default="")
+        index_attribute_name: bpy.props.StringProperty(name="Index Attribute Name", default="af_source_index")
+        value_type: bpy.props.EnumProperty(
+            name="Value Type",
+            items=GEOMETRY_ATTRIBUTE_VALUE_TYPE_ITEMS,
+            default="FLOAT",
+            update=lambda self, context: self._sync_sockets(),
+        )
+
+        def init(self, context):
+            del context
+            self._sync_sockets()
+            _set_default_node_width(self)
+            _set_node_color(self, "GEOMETRY")
+            _hide_default_auxiliary_outputs(self)
+
+        def draw_buttons(self, context, layout):
+            del context
+            layout.prop(self, "carrier_object", text="Carrier Object")
+            layout.prop(self, "attribute_name", text="Attribute")
+            layout.prop(self, "index_attribute_name", text="Index Attribute")
+            layout.prop(self, "value_type", text="")
+
+        def _sync_sockets(self):
+            _sync_publish_geometry_attribute_node_sockets(self)
+            _hide_default_auxiliary_outputs(self)
+
+        def update(self):
+            self._sync_sockets()
+
     return {
         "_sync_property_context_sockets": _sync_property_context_sockets,
         "_sync_sample_object_index_sockets": _sync_sample_object_index_sockets,
         "_sync_context_reduce_value_sockets": _sync_context_reduce_value_sockets,
         "_sync_geometry_attribute_node_sockets": _sync_geometry_attribute_node_sockets,
+        "_sync_set_geometry_attribute_node_sockets": _sync_set_geometry_attribute_node_sockets,
+        "_sync_publish_geometry_attribute_node_sockets": _sync_publish_geometry_attribute_node_sockets,
         "AFNodePropertyContext": AFNodePropertyContext,
         "AFNodeSampleObjectIndex": AFNodeSampleObjectIndex,
         "AFNodeReduceContextValue": AFNodeReduceContextValue,
         "AFNodeReadGeometryAttribute": AFNodeReadGeometryAttribute,
+        "AFNodeSetGeometryAttribute": AFNodeSetGeometryAttribute,
+        "AFNodePublishGeometryAttribute": AFNodePublishGeometryAttribute,
     }

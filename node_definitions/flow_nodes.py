@@ -148,6 +148,16 @@ def build_flow_node_classes(
                 pass
             return bool(getattr(self, "default_value", False))
 
+    class AFNodeTaskStatusOverride(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeTaskStatusOverride"
+        bl_label = "Task Status Override"
+        bl_icon = "BLANK1"
+
+        def init(self, context):
+            del context
+            self.inputs.new("AFSocketFlow", "Trigger")
+            self.inputs.new("NodeSocketString", "Status")
+
     class AFNodeRepeatStart(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeRepeatStart"
         bl_label = "Repeat Start"
@@ -306,11 +316,6 @@ def build_flow_node_classes(
         def init(self, context):
             del context
             self.inputs.new("AFSocketFlow", "Branch Flow")
-            status_input = self.inputs.new("NodeSocketString", "Status")
-            try:
-                status_input.hide_value = True
-            except Exception:
-                pass
 
     class AFNodeEnd(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeEnd"
@@ -378,6 +383,7 @@ def build_flow_node_classes(
         "AFNodeGroup": AFNodeGroup,
         "AFNodeStart": AFNodeStart,
         "AFNodeFlowToggle": AFNodeFlowToggle,
+        "AFNodeTaskStatusOverride": AFNodeTaskStatusOverride,
         "AFNodeRepeatStart": AFNodeRepeatStart,
         "AFNodeRepeatEnd": AFNodeRepeatEnd,
         "AFNodeSubflowStart": AFNodeSubflowStart,
