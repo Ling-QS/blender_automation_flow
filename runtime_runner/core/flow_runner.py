@@ -249,6 +249,7 @@ class FlowRunner(
         self._status_report_cache_dirty = False
         self._flow_toggle_cache_payload = None
         self._flow_toggle_cache_dirty = False
+        self._preview_data_node_read_only = False
 
     def _evaluate_data_node(self, node):
         node_identity = self._node_identity(node)

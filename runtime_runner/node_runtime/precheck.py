@@ -163,6 +163,17 @@ class RuntimeNodePrecheckMixin:
         elif node_type == "AFNodeCreatePropertyPackage":
             if _find_single_from_input_socket(node.inputs["Object List"])[0] is None:
                 issues.append(_make_issue("AF_E011", "Object List input is not linked", node.name))
+        elif node_type == "AFNodeRefreshPropertyPackage":
+            package_socket = self._input_socket(node, PROPERTY_PACKAGE_SOCKET_NAME)
+            if package_socket is None or _find_single_from_input_socket(package_socket)[0] is None:
+                issues.append(_make_issue("AF_E011", "Property Package input is not linked", node.name))
+            if not bool(getattr(node, "refresh_values", True)) and not bool(getattr(node, "prune_items", False)):
+                issues.append(_make_issue("AF_E020", "Enable Refresh Values or Prune Items", node.name))
+        elif node_type == "AFNodeReadPropertyPackage":
+            try:
+                self._resolve_read_property_package_target(node)
+            except FlowExecutionError as exc:
+                issues.append(_make_issue(exc.code, exc.message, exc.node_name or node.name))
         elif node_type == "AFNodePropertyPackageBakeTarget":
             if _find_single_from_input_socket(node.inputs["Task Ref"])[0] is None:
                 issues.append(_make_issue("AF_E011", "Task Ref input is not linked", node.name))

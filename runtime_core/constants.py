@@ -106,10 +106,16 @@ PROPERTY_CONTEXT_STATIC_DATA_NODE_TYPES = {
     "AFNodeInputRotation",
     "AFNodeStatusInput",
     "AFNodePlaybackState",
+    "AFNodeFlowTriggerState",
+    "AFNodeObjectInteractionState",
+    "AFNodeViewportShadingState",
+    "AFNodeBooleanEdge",
+    "AFNodeBooleanLatch",
     "AFNodeSceneTime",
     "AFNodeSceneObjectList",
     "AFNodeObjectInfo",
     "AFNodeTaskOutput",
+    "AFNodeReadPropertyPackage",
 }
 
 

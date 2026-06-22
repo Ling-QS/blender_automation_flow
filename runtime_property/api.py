@@ -31,6 +31,7 @@ from .definitions import (
     _property_definition_has_content,
     _property_definition_matching_fields,
     _property_package_signature,
+    _sanitize_reusable_property_definition,
     _validate_property_definition,
 )
 from .packages import (
@@ -223,6 +224,7 @@ _property_package_to_definition = bind_partial_export(
     normalize_property_definition_entries=_normalize_property_definition_entries,
     make_empty_property_definition=_make_empty_property_definition,
     clone_property_definition=_clone_property_definition,
+    sanitize_reusable_property_definition=_sanitize_reusable_property_definition,
     validate_property_definition=_validate_property_definition,
 )
 
@@ -359,7 +361,6 @@ def _filter_property_package(
     property_definition=None,
     object_filter_active=False,
     object_names=None,
-    remove_missing_modifiers=False,
     object_resolver=None,
     node_name="",
     stats=None,
@@ -374,7 +375,6 @@ def _filter_property_package(
                 property_definition=property_definition,
                 object_filter_active=object_filter_active,
                 object_names=object_names,
-                remove_missing_modifiers=remove_missing_modifiers,
                 object_resolver=object_resolver,
                 node_name=node_name,
                 stats=stats,
@@ -382,15 +382,6 @@ def _filter_property_package(
             if _property_package_item_count(filtered_entry) <= 0:
                 continue
             filtered_entries.append(filtered_entry)
-        if filter_mode == "KEEP_MATCHED" and object_filter_active and not (
-            property_definition is not None and _property_definition_has_content(property_definition, node_name or "Filter")
-        ):
-            filtered_composite = _make_composite_property_package(
-                package.get("source_node", ""),
-                filtered_entries,
-                metadata={},
-            )
-            return _property_package_keep_objects_only(filtered_composite, object_resolver=object_resolver)
         result = _make_composite_property_package(
             package.get("source_node", ""),
             filtered_entries,
@@ -450,7 +441,7 @@ def _filter_property_package(
             filtered_leaf["metadata"]["property_definition"] = _make_empty_property_definition(
                 node_name or str(package.get("source_node", "") or "Filter")
             )
-        return _property_package_keep_objects_only(filtered_leaf, object_resolver=object_resolver)
+        return filtered_leaf
     if keep and object_filter_active and not definition_filter_active:
         for item in package.get("items", []):
             item_object_id = int(item.get("object_id", 0) or 0)
@@ -479,21 +470,6 @@ def _filter_property_package(
         return _property_package_keep_objects_only(filtered_leaf, object_resolver=object_resolver)
     if not object_filter_active and not definition_filter_active and not keep:
         result = _clone_property_package(package)
-        if remove_missing_modifiers and str(package.get("scope_kind", "") or "") == PROPERTY_PACKAGE_SCOPE_MODIFIER:
-            retained_items = []
-            for item in result.get("items", []):
-                if callable(object_resolver):
-                    obj = object_resolver({"id": item["object_id"], "name": item["object_name"]})
-                else:
-                    obj = _find_object_by_item({"id": item["object_id"], "name": item["object_name"]})
-                if obj is not None:
-                    modifier_name = str(item.get("component_name", "") or "")
-                    if not getattr(obj, "modifiers", {}).get(modifier_name):
-                        if stats is not None:
-                            stats["removed_missing_modifier_count"] = int(stats.get("removed_missing_modifier_count", 0)) + 1
-                        continue
-                retained_items.append(copy.deepcopy(item))
-            result["items"] = retained_items
         result["metadata"] = copy.deepcopy(result.get("metadata", {}))
         result["metadata"]["count"] = len(result.get("items", []))
         result["metadata"]["object_count"] = len({int(item["object_id"]) for item in result.get("items", [])})
@@ -556,17 +532,6 @@ def _filter_property_package(
                     if not copied_item["properties"]:
                         object_only_candidates.append(copy.deepcopy(copied_item))
                         continue
-        if remove_missing_modifiers and str(package.get("scope_kind", "") or "") == PROPERTY_PACKAGE_SCOPE_MODIFIER:
-            if callable(object_resolver):
-                obj = object_resolver({"id": copied_item["object_id"], "name": copied_item["object_name"]})
-            else:
-                obj = _find_object_by_item({"id": copied_item["object_id"], "name": copied_item["object_name"]})
-            if obj is not None:
-                modifier_name = str(copied_item.get("component_name", "") or "")
-                if not getattr(obj, "modifiers", {}).get(modifier_name):
-                    if stats is not None:
-                        stats["removed_missing_modifier_count"] = int(stats.get("removed_missing_modifier_count", 0)) + 1
-                    continue
         filtered_items.append(copied_item)
     if not filtered_items and object_only_candidates:
         objects_only_package = _clone_property_package(package)

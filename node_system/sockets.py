@@ -34,9 +34,7 @@ ROTATION_MODE_MENU_ITEMS = (
 
 
 def _virtual_socket_color():
-    # Match Geometry Nodes-style placeholder sockets more closely than Blender's
-    # default virtual socket swatch, which reads too close to float sockets here.
-    return (0.2, 0.2, 0.2, 1.0)
+    return (0.29, 0.29, 0.29, 1.0)
 
 
 def is_flow_socket_idname(socket_idname):

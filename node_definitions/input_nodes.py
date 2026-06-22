@@ -10,6 +10,37 @@ def build_input_node_classes(
     _set_node_color,
     _status_value_display_label,
 ):
+    def _ensure_output_socket_name(node, expected_name, *legacy_names):
+        outputs = getattr(node, "outputs", None)
+        socket = getattr(outputs, "get", lambda _name: None)(expected_name) if outputs is not None else None
+        if socket is None and outputs is not None:
+            for legacy_name in legacy_names:
+                socket = getattr(outputs, "get", lambda _name: None)(legacy_name)
+                if socket is not None:
+                    break
+        if socket is not None and str(getattr(socket, "name", "") or "") != expected_name:
+            try:
+                socket.name = expected_name
+            except Exception:
+                pass
+        return socket
+
+    object_interaction_mode_items = (
+        ("OBJECT", "Object", "Stay true while Object Mode is active"),
+        ("EDIT", "Edit", "Stay true while Edit Mode is active"),
+        ("SCULPT", "Sculpt", "Stay true while Sculpt Mode is active"),
+        ("POSE", "Pose", "Stay true while Pose Mode is active"),
+        ("WEIGHT_PAINT", "Weight Paint", "Stay true while Weight Paint Mode is active"),
+        ("VERTEX_PAINT", "Vertex Paint", "Stay true while Vertex Paint Mode is active"),
+        ("TEXTURE_PAINT", "Texture Paint", "Stay true while Texture Paint Mode is active"),
+    )
+    viewport_shading_mode_items = (
+        ("WIREFRAME", "Wireframe", "Stay true while Wireframe shading is active"),
+        ("SOLID", "Solid", "Stay true while Solid shading is active"),
+        ("MATERIAL", "Material Preview", "Stay true while Material Preview shading is active"),
+        ("RENDERED", "Rendered", "Stay true while Rendered shading is active"),
+    )
+
     class AFNodePlaybackState(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodePlaybackState"
         bl_label = "Playback State"
@@ -22,6 +53,89 @@ def build_input_node_classes(
             self.outputs.new("NodeSocketBool", "On Pause")
             self.outputs.new("AFSocketReport", "Report")
             _hide_default_auxiliary_outputs(self)
+
+    class AFNodeFlowTriggerState(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeFlowTriggerState"
+        bl_label = "Flow Trigger State"
+        bl_icon = "BLANK1"
+
+        def init(self, context):
+            del context
+            self.outputs.new("NodeSocketBool", "Manual")
+            self.outputs.new("NodeSocketBool", "Scene Updating")
+            self.outputs.new("NodeSocketBool", "On Scene Update Start")
+            self.outputs.new("NodeSocketBool", "On Scene Update End")
+            self.outputs.new("AFSocketReport", "Report")
+            _hide_default_auxiliary_outputs(self)
+
+    class AFNodeObjectInteractionState(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeObjectInteractionState"
+        bl_label = "Object Interaction State"
+        bl_icon = "BLANK1"
+
+        target_interaction_mode: bpy.props.EnumProperty(
+            name="Mode",
+            items=object_interaction_mode_items,
+            default="OBJECT",
+        )
+
+        def init(self, context):
+            del context
+            self.outputs.new("NodeSocketBool", "Active")
+            _set_node_color(self, "INPUT")
+
+        def draw_buttons(self, context, layout):
+            del context
+            _ensure_output_socket_name(self, "Active", "Triggered")
+            layout.prop(self, "target_interaction_mode", text="")
+
+    class AFNodeViewportShadingState(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeViewportShadingState"
+        bl_label = "Viewport Shading State"
+        bl_icon = "BLANK1"
+
+        target_shading_mode: bpy.props.EnumProperty(
+            name="Shading",
+            items=viewport_shading_mode_items,
+            default="SOLID",
+        )
+
+        def init(self, context):
+            del context
+            self.outputs.new("NodeSocketBool", "Active")
+            _set_node_color(self, "INPUT")
+
+        def draw_buttons(self, context, layout):
+            del context
+            _ensure_output_socket_name(self, "Active", "Triggered")
+            layout.prop(self, "target_shading_mode", text="")
+
+    class AFNodeBooleanEdge(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeBooleanEdge"
+        bl_label = "Boolean Edge"
+        bl_icon = "BLANK1"
+
+        def init(self, context):
+            del context
+            value_socket = self.inputs.new("NodeSocketBool", "Value")
+            value_socket.default_value = False
+            self.outputs.new("NodeSocketBool", "On True")
+            self.outputs.new("NodeSocketBool", "On False")
+            _set_node_color(self, "INPUT")
+
+    class AFNodeBooleanLatch(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeBooleanLatch"
+        bl_label = "Boolean Latch"
+        bl_icon = "BLANK1"
+
+        def init(self, context):
+            del context
+            set_socket = self.inputs.new("NodeSocketBool", "Set")
+            set_socket.default_value = False
+            reset_socket = self.inputs.new("NodeSocketBool", "Reset")
+            reset_socket.default_value = False
+            self.outputs.new("NodeSocketBool", "State")
+            _set_node_color(self, "INPUT")
 
     class AFNodeSceneTime(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeSceneTime"
@@ -162,6 +276,11 @@ def build_input_node_classes(
 
     return {
         "AFNodePlaybackState": AFNodePlaybackState,
+        "AFNodeFlowTriggerState": AFNodeFlowTriggerState,
+        "AFNodeObjectInteractionState": AFNodeObjectInteractionState,
+        "AFNodeViewportShadingState": AFNodeViewportShadingState,
+        "AFNodeBooleanEdge": AFNodeBooleanEdge,
+        "AFNodeBooleanLatch": AFNodeBooleanLatch,
         "AFNodeSceneTime": AFNodeSceneTime,
         "AFNodeFloatInput": AFNodeFloatInput,
         "AFNodeBooleanInput": AFNodeBooleanInput,

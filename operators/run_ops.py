@@ -18,6 +18,30 @@ from .flow_run import (
     _suspend_auto_follow_notifications,
 )
 
+
+def _merge_runner_ui_context(runtime_context, runner):
+    merged = dict(runtime_context or {})
+    existing = dict(getattr(runner, "ui_context", {}) or {}) if runner is not None else {}
+    if "playback_state" in existing and "playback_state" not in merged:
+        merged["playback_state"] = dict(existing.get("playback_state") or {})
+    if "trigger_state" in existing and "trigger_state" not in merged:
+        merged["trigger_state"] = dict(existing.get("trigger_state") or {})
+    return merged
+
+
+def _manual_trigger_ui_context(context):
+    payload = _capture_runtime_ui_context(context)
+    payload["trigger_state"] = {
+        "manual": True,
+        "scene_updating": False,
+        "on_scene_update_start": False,
+        "on_scene_update_end": False,
+        "object_interaction_mode": "",
+        "viewport_shading_mode": "",
+    }
+    return payload
+
+
 class AF_OT_RunFlow(bpy.types.Operator):
     bl_idname = "af.run_flow"
     bl_label = "Run Automation Flow"
@@ -35,7 +59,7 @@ class AF_OT_RunFlow(bpy.types.Operator):
             self._finish(context)
             return {"CANCELLED"}
 
-        runner.ui_context = _capture_runtime_ui_context(context)
+        runner.ui_context = _merge_runner_ui_context(_capture_runtime_ui_context(context), runner)
         _suspend_auto_follow_notifications()
         try:
             finished = runner.tick(max_immediate_steps=_runner_tick_step_budget(runner))
@@ -66,7 +90,7 @@ class AF_OT_RunFlow(bpy.types.Operator):
             return {"CANCELLED"}
 
         try:
-            _start_runner(tree, context.scene, ui_context=_capture_runtime_ui_context(context))
+            _start_runner(tree, context.scene, ui_context=_manual_trigger_ui_context(context))
         except Exception as exc:
             _tag_flow_node_editor_redraw(tree.name)
             self.report({"ERROR"}, f"Failed to start flow: {exc}")
@@ -106,7 +130,7 @@ class AF_OT_ResumeFlowModal(bpy.types.Operator):
             self._finish(context)
             return {"CANCELLED"}
 
-        runner.ui_context = _capture_runtime_ui_context(context)
+        runner.ui_context = _merge_runner_ui_context(_capture_runtime_ui_context(context), runner)
         _suspend_auto_follow_notifications()
         try:
             finished = runner.tick(max_immediate_steps=_runner_tick_step_budget(runner))
@@ -178,7 +202,7 @@ class AF_OT_RunStartNode(bpy.types.Operator):
             self._finish(context)
             return {"CANCELLED"}
 
-        runner.ui_context = _capture_runtime_ui_context(context)
+        runner.ui_context = _merge_runner_ui_context(_capture_runtime_ui_context(context), runner)
         _suspend_auto_follow_notifications()
         try:
             finished = runner.tick(max_immediate_steps=_runner_tick_step_budget(runner))
@@ -221,7 +245,7 @@ class AF_OT_RunStartNode(bpy.types.Operator):
             _start_runner(
                 node_tree,
                 context.scene,
-                ui_context=_capture_runtime_ui_context(context),
+                ui_context=_manual_trigger_ui_context(context),
                 start_node_name=self.start_node_name,
             )
         except Exception as exc:
@@ -288,7 +312,7 @@ class AF_OT_RunSubflowStart(bpy.types.Operator):
             self._finish(context)
             return {"CANCELLED"}
 
-        runner.ui_context = _capture_runtime_ui_context(context)
+        runner.ui_context = _merge_runner_ui_context(_capture_runtime_ui_context(context), runner)
         _suspend_auto_follow_notifications()
         try:
             finished = runner.tick(max_immediate_steps=_runner_tick_step_budget(runner))
@@ -332,7 +356,7 @@ class AF_OT_RunSubflowStart(bpy.types.Operator):
                 node_tree,
                 context.scene,
                 subflow_start_name=self.subflow_start_name,
-                ui_context=_capture_runtime_ui_context(context),
+                ui_context=_manual_trigger_ui_context(context),
             )
         except Exception as exc:
             if self._previous_run_mode is not None:
@@ -398,7 +422,7 @@ class AF_OT_RunBranchStart(bpy.types.Operator):
             self._finish(context)
             return {"CANCELLED"}
 
-        runner.ui_context = _capture_runtime_ui_context(context)
+        runner.ui_context = _merge_runner_ui_context(_capture_runtime_ui_context(context), runner)
         _suspend_auto_follow_notifications()
         try:
             finished = runner.tick(max_immediate_steps=_runner_tick_step_budget(runner))
@@ -442,7 +466,7 @@ class AF_OT_RunBranchStart(bpy.types.Operator):
                 node_tree,
                 context.scene,
                 branch_start_name=self.branch_start_name,
-                ui_context=_capture_runtime_ui_context(context),
+                ui_context=_manual_trigger_ui_context(context),
             )
         except Exception as exc:
             if self._previous_run_mode is not None:

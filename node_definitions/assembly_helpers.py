@@ -34,21 +34,17 @@ GROUP_NODE_EXPORTS = (
 )
 
 PROPERTY_DATA_HELPER_EXPORTS = (
-    "_OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS",
-    "_apply_property_data_socket_visibility",
     "_draw_modifier_property_assignment_fields",
     "_draw_object_display_property_assignment_fields",
     "_draw_object_transform_property_assignment_fields",
     "_draw_property_data_input_socket",
     "_draw_rotation_value_inputs",
-    "_initialize_object_transform_property_input_defaults",
     "_modifier_property_definition_from_node",
     "_object_display_property_definition_from_node",
     "_object_transform_property_definition_from_node",
     "_persist_property_data_manual_hidden_keys",
     "_property_data_field_specs",
     "_property_data_input_specs",
-    "_property_data_output_specs",
     "_property_data_socket_key",
     "_property_data_update_socket_layout",
     "_refresh_property_data_socket_visibility",
@@ -185,10 +181,16 @@ SOCKET_REBUILD_EXPORTS = (
     "_SOCKET_REBUILD_HELPERS",
     "_rebuild_sockets",
     "_sync_parse_property_package_sockets",
+    "_sync_refresh_property_package_sockets",
 )
 
 INPUT_NODE_CLASS_NAMES = (
     "AFNodePlaybackState",
+    "AFNodeFlowTriggerState",
+    "AFNodeObjectInteractionState",
+    "AFNodeViewportShadingState",
+    "AFNodeBooleanEdge",
+    "AFNodeBooleanLatch",
     "AFNodeSceneTime",
     "AFNodeFloatInput",
     "AFNodeBooleanInput",
@@ -289,7 +291,9 @@ PROPERTY_PACKAGE_NODE_CLASS_NAMES = (
     "AFNodeFilterPropertyPackage",
     "AFNodeMergePropertyPackages",
     "AFNodeCreatePropertyPackage",
+    "AFNodeRefreshPropertyPackage",
     "AFNodeStorePropertyPackage",
+    "AFNodeReadPropertyPackage",
     "AFNodeApplyObjectProperties",
     "AFNodeApplyPropertyPackage",
     "AFNodeRecordPropertyPackage",
@@ -507,6 +511,7 @@ def build_socket_rebuild_exports(
         "_SOCKET_REBUILD_HELPERS": socket_rebuild_helpers,
         "_rebuild_sockets": socket_rebuild_helpers["_rebuild_sockets"],
         "_sync_parse_property_package_sockets": socket_rebuild_helpers["_sync_parse_property_package_sockets"],
+        "_sync_refresh_property_package_sockets": socket_rebuild_helpers["_sync_refresh_property_package_sockets"],
     }
 
 
@@ -636,15 +641,11 @@ def build_node_build_exports(namespace):
                 OBJECT_ROTATION_MODE_ITEMS=ns["OBJECT_ROTATION_MODE_ITEMS"],
                 PROPERTY_DATA_OUTPUT_MODE_ITEMS=ns["PROPERTY_DATA_OUTPUT_MODE_ITEMS"],
                 PROPERTY_VALUE_SOURCE_ITEMS=ns["PROPERTY_VALUE_SOURCE_ITEMS"],
-                _OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS=ns["_OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS"],
-                _apply_property_data_socket_visibility=ns["_apply_property_data_socket_visibility"],
                 _draw_modifier_property_assignment_fields=ns["_draw_modifier_property_assignment_fields"],
                 _draw_object_display_property_assignment_fields=ns["_draw_object_display_property_assignment_fields"],
                 _draw_object_transform_property_assignment_fields=ns["_draw_object_transform_property_assignment_fields"],
                 _hide_default_auxiliary_outputs=ns["_hide_default_auxiliary_outputs"],
-                _initialize_object_transform_property_input_defaults=ns["_initialize_object_transform_property_input_defaults"],
                 _persist_property_data_manual_hidden_keys=ns["_persist_property_data_manual_hidden_keys"],
-                _property_data_output_specs=ns["_property_data_output_specs"],
                 _property_data_update_socket_layout=ns["_property_data_update_socket_layout"],
                 _refresh_property_data_socket_visibility=ns["_refresh_property_data_socket_visibility"],
                 _resolve_property_data_manual_hidden_keys=ns["_resolve_property_data_manual_hidden_keys"],
@@ -694,6 +695,7 @@ def build_node_build_exports(namespace):
                 MISSING_POLICY_ITEMS=ns["MISSING_POLICY_ITEMS"],
                 PROPERTY_PACKAGE_CONFLICT_POLICY_ITEMS=ns["PROPERTY_PACKAGE_CONFLICT_POLICY_ITEMS"],
                 PROPERTY_PACKAGE_FILTER_MODE_ITEMS=ns["PROPERTY_PACKAGE_FILTER_MODE_ITEMS"],
+                REFRESH_PROPERTY_PACKAGE_RANGE_MODE_ITEMS=ns["REFRESH_PROPERTY_PACKAGE_RANGE_MODE_ITEMS"],
                 PROPERTY_PACKAGE_STORE_MODE_ITEMS=ns["PROPERTY_PACKAGE_STORE_MODE_ITEMS"],
                 SORT_MODE_ITEMS=ns["SORT_MODE_ITEMS"],
                 _has_stored_property_package=ns["_has_stored_property_package"],
@@ -766,14 +768,18 @@ def build_nodes_module_exports(namespace):
             direction,
             include_default_values=include_default_values,
         ),
-        _restore_dynamic_socket_state=lambda node, direction, state, socket_specs, restore_default_values=True: ns[
-            "_restore_dynamic_socket_state"
-        ](
+        _restore_dynamic_socket_state=lambda node,
+        direction,
+        state,
+        socket_specs,
+        restore_default_values=True,
+        restore_hide_state=True: ns["_restore_dynamic_socket_state"](
             node,
             direction,
             state,
             socket_specs,
             restore_default_values=restore_default_values,
+            restore_hide_state=restore_hide_state,
         ),
     )
     support_helper_exports = build_support_helper_exports(

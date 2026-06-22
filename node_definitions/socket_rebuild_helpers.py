@@ -11,8 +11,24 @@ def build_socket_rebuild_helpers(
         ("AFSocketPropertyDefinition", "Property Definition"),
         ("AFSocketReport", "Report"),
     )
+    REFRESH_PROPERTY_PACKAGE_INPUT_SPECS = (
+        ("AFSocketPropertyPackage", "Property Package"),
+        ("AFSocketObjectList", "Object List"),
+        ("AFSocketPropertyDefinition", "Property Definition"),
+    )
+    REFRESH_PROPERTY_PACKAGE_OUTPUT_SPECS = (
+        ("AFSocketPropertyPackage", "Property Package"),
+        ("AFSocketReport", "Report"),
+    )
 
-    def _rebuild_sockets(node, input_specs, output_specs, include_default_values=True, restore_dynamic_state=True):
+    def _rebuild_sockets(
+        node,
+        input_specs,
+        output_specs,
+        include_default_values=True,
+        restore_dynamic_state=True,
+        restore_hide_state=True,
+    ):
         input_state = []
         output_state = []
         if restore_dynamic_state:
@@ -33,6 +49,7 @@ def build_socket_rebuild_helpers(
                 input_state,
                 input_specs,
                 restore_default_values=include_default_values,
+                restore_hide_state=restore_hide_state,
             )
             _restore_dynamic_socket_state(
                 node,
@@ -40,6 +57,7 @@ def build_socket_rebuild_helpers(
                 output_state,
                 output_specs,
                 restore_default_values=include_default_values,
+                restore_hide_state=restore_hide_state,
             )
 
     def _sync_parse_property_package_sockets(node):
@@ -69,9 +87,39 @@ def build_socket_rebuild_helpers(
             if resume_runtime_sync is not None:
                 resume_runtime_sync()
 
+    def _sync_refresh_property_package_sockets(node):
+        if str(getattr(node, "bl_idname", "") or "") != "AFNodeRefreshPropertyPackage":
+            return
+        input_signature = [
+            (str(getattr(socket, "bl_idname", "") or ""), str(getattr(socket, "name", "") or ""))
+            for socket in getattr(node, "inputs", [])
+        ]
+        output_signature = [
+            (str(getattr(socket, "bl_idname", "") or ""), str(getattr(socket, "name", "") or ""))
+            for socket in getattr(node, "outputs", [])
+        ]
+        if input_signature == list(REFRESH_PROPERTY_PACKAGE_INPUT_SPECS) and output_signature == list(
+            REFRESH_PROPERTY_PACKAGE_OUTPUT_SPECS
+        ):
+            return
+        suspend_runtime_sync = None
+        resume_runtime_sync = None
+        try:
+            from ..node_system.tree import resume_runtime_sync, suspend_runtime_sync
+        except Exception:
+            pass
+        if suspend_runtime_sync is not None:
+            suspend_runtime_sync()
+        try:
+            _rebuild_sockets(node, REFRESH_PROPERTY_PACKAGE_INPUT_SPECS, REFRESH_PROPERTY_PACKAGE_OUTPUT_SPECS)
+        finally:
+            if resume_runtime_sync is not None:
+                resume_runtime_sync()
+
     return {
         "_rebuild_sockets": _rebuild_sockets,
         "_sync_parse_property_package_sockets": _sync_parse_property_package_sockets,
+        "_sync_refresh_property_package_sockets": _sync_refresh_property_package_sockets,
     }
 
 

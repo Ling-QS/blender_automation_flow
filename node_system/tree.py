@@ -83,7 +83,10 @@ def _runtime_sync_enabled():
 def _tree_runtime_revision_key(node_tree):
     if node_tree is None:
         return None
-    return int(node_tree.as_pointer()) if hasattr(node_tree, "as_pointer") else id(node_tree)
+    try:
+        return int(node_tree.as_pointer()) if hasattr(node_tree, "as_pointer") else id(node_tree)
+    except (ReferenceError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 def _touch_tree_runtime_revision(node_tree):
@@ -285,36 +288,71 @@ def _insert_auto_cast_node(node_tree, link, conversion_mode):
 
 
 def _sync_dynamic_node_inputs(node_tree):
-    if not _runtime_sync_enabled():
+    callbacks = _dynamic_node_sync_callbacks(node_tree, include_pair_sync=True)
+    if callbacks is None:
         return
+    for node in node_tree.nodes:
+        _sync_dynamic_node_with_callbacks(node, callbacks)
+
+
+def _dynamic_node_sync_callbacks(node_tree, *, include_pair_sync):
+    if not _runtime_sync_enabled():
+        return None
     try:
         from .. import nodes as nodes_module
     except Exception:
-        return
+        return None
     pair_guard = getattr(nodes_module, "_PAIR_NODE_SYNC_GUARD", None)
     tree_key = int(node_tree.as_pointer()) if hasattr(node_tree, "as_pointer") else id(node_tree)
     if pair_guard is not None and tree_key in pair_guard:
+        return None
+    if bool(include_pair_sync):
+        pair_node_sync_fn = getattr(nodes_module, "_sync_paired_flow_nodes", None)
+        if pair_node_sync_fn is not None:
+            try:
+                pair_node_sync_fn(node_tree)
+            except Exception:
+                pass
+    callbacks = {
+        "sync_fn": getattr(nodes_module, "_sync_physics_bake_task_inputs", None),
+        "task_step_sync_fn": getattr(nodes_module, "_sync_task_step_sockets", None),
+        "bake_target_sync_fn": getattr(nodes_module, "_sync_bake_target_sockets", None),
+        "physics_bake_target_sync_fn": getattr(nodes_module, "_sync_physics_bake_target_sockets", None),
+        "evaluate_dependencies_sync_fn": getattr(nodes_module, "_sync_evaluate_task_dependencies_sockets", None),
+        "render_target_sync_fn": getattr(nodes_module, "_sync_render_target_sockets", None),
+        "run_task_plan_sync_fn": getattr(nodes_module, "_sync_run_task_plan_sockets", None),
+        "task_output_sync_fn": getattr(nodes_module, "_sync_task_output_sockets", None),
+        "branch_end_sync_fn": getattr(nodes_module, "_sync_branch_end_sockets", None),
+        "run_background_task_plan_sync_fn": getattr(nodes_module, "_sync_run_background_task_plan_sockets", None),
+        "index_switch_sync_fn": getattr(nodes_module, "_sync_index_switch_sockets", None),
+        "preview_data_sync_fn": getattr(nodes_module, "_sync_preview_data_sockets", None),
+        "parse_property_package_sync_fn": getattr(nodes_module, "_sync_parse_property_package_sockets", None),
+        "refresh_property_package_sync_fn": getattr(nodes_module, "_sync_refresh_property_package_sockets", None),
+        "hide_report_outputs_fn": getattr(nodes_module, "_hide_report_outputs", None),
+    }
+    if not any(callbacks.values()):
+        return None
+    return callbacks
+
+
+def _sync_dynamic_node_with_callbacks(node, callbacks):
+    if node is None or not callbacks:
         return
-    pair_node_sync_fn = getattr(nodes_module, "_sync_paired_flow_nodes", None)
-    if pair_node_sync_fn is not None:
-        try:
-            pair_node_sync_fn(node_tree)
-        except Exception:
-            pass
-    sync_fn = getattr(nodes_module, "_sync_physics_bake_task_inputs", None)
-    task_step_sync_fn = getattr(nodes_module, "_sync_task_step_sockets", None)
-    bake_target_sync_fn = getattr(nodes_module, "_sync_bake_target_sockets", None)
-    physics_bake_target_sync_fn = getattr(nodes_module, "_sync_physics_bake_target_sockets", None)
-    evaluate_dependencies_sync_fn = getattr(nodes_module, "_sync_evaluate_task_dependencies_sockets", None)
-    render_target_sync_fn = getattr(nodes_module, "_sync_render_target_sockets", None)
-    run_task_plan_sync_fn = getattr(nodes_module, "_sync_run_task_plan_sockets", None)
-    task_output_sync_fn = getattr(nodes_module, "_sync_task_output_sockets", None)
-    branch_end_sync_fn = getattr(nodes_module, "_sync_branch_end_sockets", None)
-    run_background_task_plan_sync_fn = getattr(nodes_module, "_sync_run_background_task_plan_sockets", None)
-    index_switch_sync_fn = getattr(nodes_module, "_sync_index_switch_sockets", None)
-    preview_data_sync_fn = getattr(nodes_module, "_sync_preview_data_sockets", None)
-    parse_property_package_sync_fn = getattr(nodes_module, "_sync_parse_property_package_sockets", None)
-    hide_report_outputs_fn = getattr(nodes_module, "_hide_report_outputs", None)
+    sync_fn = callbacks.get("sync_fn")
+    task_step_sync_fn = callbacks.get("task_step_sync_fn")
+    bake_target_sync_fn = callbacks.get("bake_target_sync_fn")
+    physics_bake_target_sync_fn = callbacks.get("physics_bake_target_sync_fn")
+    evaluate_dependencies_sync_fn = callbacks.get("evaluate_dependencies_sync_fn")
+    render_target_sync_fn = callbacks.get("render_target_sync_fn")
+    run_task_plan_sync_fn = callbacks.get("run_task_plan_sync_fn")
+    task_output_sync_fn = callbacks.get("task_output_sync_fn")
+    branch_end_sync_fn = callbacks.get("branch_end_sync_fn")
+    run_background_task_plan_sync_fn = callbacks.get("run_background_task_plan_sync_fn")
+    index_switch_sync_fn = callbacks.get("index_switch_sync_fn")
+    preview_data_sync_fn = callbacks.get("preview_data_sync_fn")
+    parse_property_package_sync_fn = callbacks.get("parse_property_package_sync_fn")
+    refresh_property_package_sync_fn = callbacks.get("refresh_property_package_sync_fn")
+    hide_report_outputs_fn = callbacks.get("hide_report_outputs_fn")
     if (
         sync_fn is None
         and task_step_sync_fn is None
@@ -329,78 +367,103 @@ def _sync_dynamic_node_inputs(node_tree):
         and index_switch_sync_fn is None
         and preview_data_sync_fn is None
         and parse_property_package_sync_fn is None
+        and refresh_property_package_sync_fn is None
         and hide_report_outputs_fn is None
     ):
         return
-    for node in node_tree.nodes:
-        if getattr(node, "bl_idname", "") == "AFNodeBakeTask" and bake_target_sync_fn is not None:
-            try:
-                bake_target_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodePhysicsBakeTask":
-            try:
-                if physics_bake_target_sync_fn is not None:
-                    physics_bake_target_sync_fn(node)
-                else:
-                    sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeTaskStep" and task_step_sync_fn is not None:
-            try:
-                task_step_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeEvaluateTaskDependencies" and evaluate_dependencies_sync_fn is not None:
-            try:
-                evaluate_dependencies_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeRunTaskPlan" and run_task_plan_sync_fn is not None:
-            try:
-                run_task_plan_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeTaskOutput" and task_output_sync_fn is not None:
-            try:
-                task_output_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeBranchEnd" and branch_end_sync_fn is not None:
-            try:
-                branch_end_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeRunBackgroundTaskPlan" and run_background_task_plan_sync_fn is not None:
-            try:
-                run_background_task_plan_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeIndexSwitch" and index_switch_sync_fn is not None:
-            try:
-                index_switch_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodePreviewData" and preview_data_sync_fn is not None:
-            try:
-                preview_data_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") == "AFNodeParsePropertyPackage" and parse_property_package_sync_fn is not None:
-            try:
-                parse_property_package_sync_fn(node)
-            except Exception:
-                pass
-        if getattr(node, "bl_idname", "") in {"AFNodeRenderTarget", "AFNodeRenderTask"} and render_target_sync_fn is not None:
-            try:
-                render_target_sync_fn(node)
-            except Exception:
-                pass
-        if hide_report_outputs_fn is not None:
-            try:
-                hide_report_outputs_fn(node)
-            except Exception:
-                pass
+    if getattr(node, "bl_idname", "") == "AFNodeBakeTask" and bake_target_sync_fn is not None:
+        try:
+            bake_target_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodePhysicsBakeTask":
+        try:
+            if physics_bake_target_sync_fn is not None:
+                physics_bake_target_sync_fn(node)
+            else:
+                sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeTaskStep" and task_step_sync_fn is not None:
+        try:
+            task_step_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeEvaluateTaskDependencies" and evaluate_dependencies_sync_fn is not None:
+        try:
+            evaluate_dependencies_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeRunTaskPlan" and run_task_plan_sync_fn is not None:
+        try:
+            run_task_plan_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeTaskOutput" and task_output_sync_fn is not None:
+        try:
+            task_output_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeBranchEnd" and branch_end_sync_fn is not None:
+        try:
+            branch_end_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeRunBackgroundTaskPlan" and run_background_task_plan_sync_fn is not None:
+        try:
+            run_background_task_plan_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeIndexSwitch" and index_switch_sync_fn is not None:
+        try:
+            index_switch_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodePreviewData" and preview_data_sync_fn is not None:
+        try:
+            preview_data_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeParsePropertyPackage" and parse_property_package_sync_fn is not None:
+        try:
+            parse_property_package_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == "AFNodeRefreshPropertyPackage" and refresh_property_package_sync_fn is not None:
+        try:
+            refresh_property_package_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") in {"AFNodeRenderTarget", "AFNodeRenderTask"} and render_target_sync_fn is not None:
+        try:
+            render_target_sync_fn(node)
+        except Exception:
+            pass
+    if hide_report_outputs_fn is not None:
+        try:
+            hide_report_outputs_fn(node)
+        except Exception:
+            pass
+
+
+def _sync_dynamic_node_targets(node_tree, nodes, *, include_pair_sync=False):
+    if node_tree is None or getattr(node_tree, "bl_idname", "") != "AFNodeTreeType":
+        return
+    callbacks = _dynamic_node_sync_callbacks(node_tree, include_pair_sync=bool(include_pair_sync))
+    if callbacks is None:
+        return
+    seen = set()
+    for node in list(nodes or []):
+        if node is None or getattr(node, "id_data", None) != node_tree:
+            continue
+        try:
+            node_key = int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
+        except Exception:
+            node_key = id(node)
+        if node_key in seen:
+            continue
+        seen.add(node_key)
+        _sync_dynamic_node_with_callbacks(node, callbacks)
 
 
 def _get_group_sync_functions():
@@ -712,6 +775,46 @@ def _tag_node_editor_redraw(tree_name=None):
                     break
 
 
+def _refresh_runtime_data_dependents(node_tree, *, invalidate_active_runner=True):
+    if node_tree is None or getattr(node_tree, "bl_idname", "") != "AFNodeTreeType":
+        return
+    _touch_tree_runtime_revision(node_tree)
+    _tag_node_editor_redraw(getattr(node_tree, "name", None))
+    if not bool(invalidate_active_runner):
+        return
+    try:
+        from ..runtime_runner.core.active import get_active_runner
+    except Exception:
+        return
+    try:
+        runner = get_active_runner()
+    except Exception:
+        runner = None
+    if runner is None:
+        return
+    try:
+        runner._invalidate_data_node_outputs()
+    except Exception:
+        pass
+
+
+def _refresh_dynamic_node_dependents(node_tree, *, invalidate_active_runner=True):
+    _refresh_runtime_data_dependents(
+        node_tree,
+        invalidate_active_runner=bool(invalidate_active_runner),
+    )
+    if node_tree is None or getattr(node_tree, "bl_idname", "") != "AFNodeTreeType":
+        return
+    _sync_dynamic_node_inputs(node_tree)
+
+
+def _refresh_property_data_dependents(node_tree, *, invalidate_active_runner=True):
+    _refresh_dynamic_node_dependents(
+        node_tree,
+        invalidate_active_runner=bool(invalidate_active_runner),
+    )
+
+
 def _sync_reroute_socket_idnames(node_tree):
     total_changed = 0
     # Converge reroute chains in one sync call to avoid "next action updates previous" behavior.
@@ -807,9 +910,9 @@ class AFNodeTree(bpy.types.NodeTree):
         return str(socket_type) in valid_custom or str(socket_type) in valid_builtin
 
     def update(self):
-        _touch_tree_runtime_revision(self)
         if not _runtime_sync_enabled():
             return
+        _touch_tree_runtime_revision(self)
         try:
             from .. import nodes as nodes_module
             pair_guard = getattr(nodes_module, "_PAIR_NODE_SYNC_GUARD", None)
@@ -830,9 +933,9 @@ class AFNodeTree(bpy.types.NodeTree):
 
     def interface_update(self, context):
         del context
-        _touch_tree_runtime_revision(self)
         if not _runtime_sync_enabled():
             return
+        _touch_tree_runtime_revision(self)
         try:
             from .. import nodes as nodes_module
             pair_guard = getattr(nodes_module, "_PAIR_NODE_SYNC_GUARD", None)
@@ -852,9 +955,9 @@ class AFNodeTree(bpy.types.NodeTree):
         _queue_group_tree_sync(self)
 
     def insert_link(self, link):
-        _touch_tree_runtime_revision(self)
         if not _runtime_sync_enabled():
             return
+        _touch_tree_runtime_revision(self)
         if link is None:
             return
 

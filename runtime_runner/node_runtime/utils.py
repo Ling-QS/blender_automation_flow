@@ -13,10 +13,14 @@ class RuntimeNodeUtilsMixin:
         if node_type == "AFNodeFlowToggle" and output_key == "bool_value":
             return self._get_output(node, output_key, previous_group_path)
         if node_type in self.DATA_NODE_TYPES:
+            previous_preview_read_only = bool(getattr(self, "_preview_data_node_read_only", False))
             try:
+                self._preview_data_node_read_only = True
                 self._evaluate_data_node(node)
             except FlowExecutionError:
                 return None
+            finally:
+                self._preview_data_node_read_only = previous_preview_read_only
             return self._get_output(node, output_key, previous_group_path)
         if node_type in {"AFNodeStart", "AFNodeEnd", "AFNodeTaskStart", "AFNodeRepeatStart", "AFNodeRepeatEnd"}:
             return None

@@ -3,6 +3,7 @@ from ...runtime_persistence.serialization import (
     _serialize_runtime_state_value,
 )
 from ...runtime_state.cache import (
+    _boolean_state_cache_key,
     _flow_toggle_cache_key,
     _read_flow_toggle_cache,
     _read_status_report_cache,
@@ -47,6 +48,32 @@ class RuntimeOutputsMixin:
     def _write_flow_toggle_state(self, node, value, group_path=None):
         cache_payload = self._get_flow_toggle_cache_payload()
         cache_key = self._flow_toggle_cache_key_for_node(node, group_path)
+        cache_payload[cache_key] = bool(value)
+        self._flow_toggle_cache_dirty = True
+
+    def _boolean_state_cache_key_for_node(self, node, state_kind, group_path=None):
+        tree = getattr(node, "id_data", None)
+        tree_name = getattr(tree, "name_full", getattr(tree, "name", ""))
+        return _boolean_state_cache_key(
+            tree_name,
+            getattr(node, "name", ""),
+            state_kind,
+            self.current_group_path if group_path is None else group_path,
+        )
+
+    def _read_boolean_state(self, node, state_kind, default_value=False, group_path=None):
+        cache_payload = self._get_flow_toggle_cache_payload()
+        cache_key = self._boolean_state_cache_key_for_node(node, state_kind, group_path)
+        if cache_key not in cache_payload:
+            return bool(default_value)
+        try:
+            return bool(cache_payload.get(cache_key))
+        except Exception:
+            return bool(default_value)
+
+    def _write_boolean_state(self, node, state_kind, value, group_path=None):
+        cache_payload = self._get_flow_toggle_cache_payload()
+        cache_key = self._boolean_state_cache_key_for_node(node, state_kind, group_path)
         cache_payload[cache_key] = bool(value)
         self._flow_toggle_cache_dirty = True
 

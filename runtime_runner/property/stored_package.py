@@ -48,6 +48,61 @@ class RuntimeStoredPackageMixin:
             return None
         return None
 
+    def _read_stored_property_package_slot(self, node):
+        owner = self._stored_property_package_owner(node)
+        package = _read_stored_property_package_direct(node, owner=owner)
+        if package is None:
+            return None
+        return _rehydrate_property_package_object_references(
+            package,
+            object_resolver=self._find_object_by_item_cached,
+            node_name=node.name,
+        )
+
+    def _resolve_read_property_package_target(self, node):
+        node_tree = getattr(node, "id_data", None)
+        if node_tree is None or getattr(node_tree, "bl_idname", "") != "AFNodeTreeType":
+            raise FlowExecutionError("AF_E009", "Read Property Package node tree is missing", node.name)
+        target_store_id = str(getattr(node, "target_store_id", "") or "").strip()
+        target_store_node_name = str(getattr(node, "target_store_node_name", "") or "").strip()
+        if not target_store_id and not target_store_node_name:
+            raise FlowExecutionError("AF_E011", "Target Store Property Package is not selected", node.name)
+
+        matched_node = None
+        if target_store_id:
+            for candidate in getattr(node_tree, "nodes", []):
+                if str(getattr(candidate, "bl_idname", "") or "") != "AFNodeStorePropertyPackage":
+                    continue
+                if str(getattr(candidate, "store_asset_id", "") or "").strip() == target_store_id:
+                    matched_node = candidate
+                    break
+        if matched_node is None and target_store_node_name:
+            candidate = getattr(node_tree, "nodes", {}).get(target_store_node_name)
+            if candidate is None:
+                raise FlowExecutionError(
+                    "AF_E009",
+                    f"Store Property Package '{target_store_node_name}' is missing",
+                    node.name,
+                )
+            if str(getattr(candidate, "bl_idname", "") or "") != "AFNodeStorePropertyPackage":
+                raise FlowExecutionError(
+                    "AF_E011",
+                    f"Target node '{target_store_node_name}' is not a Store Property Package",
+                    node.name,
+                )
+            matched_node = candidate
+        if matched_node is None:
+            raise FlowExecutionError("AF_E009", "Target Store Property Package is missing", node.name)
+        try:
+            if str(getattr(node, "target_store_node_name", "") or "") != str(getattr(matched_node, "name", "") or ""):
+                node.target_store_node_name = str(getattr(matched_node, "name", "") or "")
+            matched_store_id = str(getattr(matched_node, "store_asset_id", "") or "").strip()
+            if matched_store_id and str(getattr(node, "target_store_id", "") or "") != matched_store_id:
+                node.target_store_id = matched_store_id
+        except Exception:
+            pass
+        return matched_node
+
     def _write_stored_property_package(self, node, property_package):
         owner = self._stored_property_package_owner(node)
         if owner is None:

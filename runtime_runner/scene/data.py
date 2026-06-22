@@ -15,6 +15,28 @@ from ...runtime_task_ref import (
 
 
 class RuntimeSceneDataMixin:
+    def _resolve_output_socket(self, node, expected_name, *legacy_names):
+        outputs = getattr(node, "outputs", None)
+        socket = getattr(outputs, "get", lambda _name: None)(expected_name) if outputs is not None else None
+        if socket is None and outputs is not None:
+            for legacy_name in legacy_names:
+                socket = getattr(outputs, "get", lambda _name: None)(legacy_name)
+                if socket is not None:
+                    break
+        if socket is not None and str(getattr(socket, "name", "") or "") != expected_name:
+            try:
+                socket.name = expected_name
+            except Exception:
+                pass
+        return socket
+
+    def _set_output_socket_value_compat(self, node, socket_name, value, *legacy_names):
+        socket = self._resolve_output_socket(node, socket_name, *legacy_names)
+        if socket is None:
+            return
+        for key in self._socket_output_keys(socket):
+            self._set_output(node, key, value)
+
     def _evaluate_scene_data_node(self, node, node_type):
         if node_type == "AFNodeCollectionList":
             base = []
@@ -98,6 +120,66 @@ class RuntimeSceneDataMixin:
                     "on_pause": bool(playback_state.get("on_pause", False)),
                 },
             )
+            return True
+
+        if node_type == "AFNodeFlowTriggerState":
+            trigger_state = self._trigger_state_snapshot()
+            self._set_output_socket_value(node, "Manual", bool(trigger_state.get("manual", False)))
+            self._set_output_socket_value(node, "Scene Updating", bool(trigger_state.get("scene_updating", False)))
+            self._set_output_socket_value(node, "On Scene Update Start", bool(trigger_state.get("on_scene_update_start", False)))
+            self._set_output_socket_value(node, "On Scene Update End", bool(trigger_state.get("on_scene_update_end", False)))
+            self._set_output(
+                node,
+                "report",
+                {
+                    "manual": bool(trigger_state.get("manual", False)),
+                    "scene_updating": bool(trigger_state.get("scene_updating", False)),
+                    "on_scene_update_start": bool(trigger_state.get("on_scene_update_start", False)),
+                    "on_scene_update_end": bool(trigger_state.get("on_scene_update_end", False)),
+                },
+            )
+            return True
+
+        if node_type == "AFNodeObjectInteractionState":
+            target_mode = str(getattr(node, "target_interaction_mode", "OBJECT") or "OBJECT")
+            self._set_output_socket_value_compat(
+                node,
+                "Active",
+                str(self._active_object_interaction_mode_snapshot() or "") == target_mode,
+                "Triggered",
+            )
+            return True
+
+        if node_type == "AFNodeViewportShadingState":
+            target_mode = str(getattr(node, "target_shading_mode", "SOLID") or "SOLID")
+            self._set_output_socket_value_compat(
+                node,
+                "Active",
+                str(self._active_viewport_shading_mode_snapshot() or "") == target_mode,
+                "Triggered",
+            )
+            return True
+
+        if node_type == "AFNodeBooleanEdge":
+            current_value = bool(self._input_bool(node, "Value", False))
+            previous_value = bool(self._read_boolean_state(node, "BOOLEAN_EDGE_PREVIOUS", False))
+            self._set_output_socket_value(node, "On True", (not previous_value) and current_value)
+            self._set_output_socket_value(node, "On False", previous_value and (not current_value))
+            if not bool(getattr(self, "_preview_data_node_read_only", False)):
+                self._write_boolean_state(node, "BOOLEAN_EDGE_PREVIOUS", current_value)
+            return True
+
+        if node_type == "AFNodeBooleanLatch":
+            set_signal = bool(self._input_bool(node, "Set", False))
+            reset_signal = bool(self._input_bool(node, "Reset", False))
+            current_state = bool(self._read_boolean_state(node, "BOOLEAN_LATCH_STATE", False))
+            if reset_signal:
+                current_state = False
+            elif set_signal:
+                current_state = True
+            self._set_output_socket_value(node, "State", current_state)
+            if not bool(getattr(self, "_preview_data_node_read_only", False)):
+                self._write_boolean_state(node, "BOOLEAN_LATCH_STATE", current_state)
             return True
 
         if node_type == "AFNodeSceneObjectList":

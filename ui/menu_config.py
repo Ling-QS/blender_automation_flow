@@ -1,14 +1,13 @@
 FLOW_MENU_REGULAR_NODES = (
     ("AFNodeStart", "Start"),
-    ("AFNodeFlowToggle", "FlowToggle"),
-    ("AFNodeTaskStatusOverride", "Task Status Override"),
     ("AFNodeEnd", "End"),
     ("AFNodeRunTaskPlan", "Run Task"),
     ("AFNodeRunBackgroundTaskPlan", "Run Background Task"),
     ("AFNodeWaitForTask", "Wait For Task"),
     ("AFNodeDelayWait", "Delay Wait"),
     ("AFNodeReloadAfterTask", "Reload After Task"),
-    ("AFNodeGroup", "Group"),
+    ("AFNodeFlowToggle", "FlowToggle"),
+    ("AFNodeTaskStatusOverride", "Task Status Override"),
 )
 
 FLOW_MENU_PAIRED_NODES = (
@@ -20,8 +19,18 @@ FLOW_MENU_PAIRED_NODES = (
     ("AFNodeBranchEnd", "Branch End"),
 )
 
+FLOW_MENU_TRIGGER_NODES = (
+    ("AFNodePlaybackState", "Playback State"),
+    ("AFNodeFlowTriggerState", "Flow Trigger State"),
+    ("AFNodeObjectInteractionState", "Object Interaction State"),
+    ("AFNodeViewportShadingState", "Viewport Shading State"),
+    ("AFNodeBooleanEdge", "Boolean Edge"),
+    ("AFNodeBooleanLatch", "Boolean Latch"),
+)
+
 FLOW_PROCESS_MENU_LABEL = "Process"
 FLOW_STRUCTURES_MENU_LABEL = "Structures"
+FLOW_TRIGGER_MENU_LABEL = "Trigger"
 
 PROPERTY_CONTEXT_DATA_MENU_NODES = (
     ("AFNodePropertyContext", "Prop Context"),
@@ -33,12 +42,14 @@ PROPERTY_CONTEXT_DATA_MENU_NODES = (
     ("AFNodeModifierPropertyData", "Modifier Data"),
     ("AFNodeObjectDisplayPropertyData", "Object Display Property Data"),
     ("AFNodeObjectTransformPropertyData", "Transform Data"),
+    ("AFNodeMergePropertyAssignments", "Merge Prop Assigns"),
 )
 
 PROPERTY_PACKAGE_MENU_NODES = (
-    ("AFNodeMergePropertyAssignments", "Merge Prop Assigns"),
     ("AFNodeCreatePropertyPackage", "Create Prop Pack"),
+    ("AFNodeRefreshPropertyPackage", "Refresh Prop Pack"),
     ("AFNodeStorePropertyPackage", "Store Prop Pack"),
+    ("AFNodeReadPropertyPackage", "Read Prop Pack"),
     ("AFNodeApplyObjectProperties", "Apply Object Properties"),
     ("AFNodeApplyPropertyPackage", "Apply Prop Pack"),
     ("AFNodeRecordPropertyPackage", "Record Prop Pack"),
@@ -49,23 +60,23 @@ PROPERTY_PACKAGE_MENU_NODES = (
 
 NODE_MENU_GROUPS = (
     (
-        "Task",
+        "Task Building",
         (
             ("AFNodeTaskStart", "Task Start"),
             ("AFNodeTaskOutput", "Task Output"),
+            ("AFNodeResolveTaskRef", "Resolve Task Ref"),
+            ("AFNodeTaskStep", "Task Step"),
+            ("AFNodeEvaluateTaskDependencies", "Evaluate Object Dependencies"),
+        ),
+    ),
+    (
+        "Task Targets",
+        (
             ("AFNodeBakeTask", "GN Bake Target"),
             ("AFNodePropertyPackageBakeTarget", "Property Package Bake Target"),
             ("AFNodePhysicsBakeSettings", "Physics Bake Settings"),
             ("AFNodePhysicsBakeTask", "Physics Bake Target"),
             ("AFNodeRenderTarget", "Render Target"),
-            ("AFNodeResolveTaskRef", "Resolve Task Ref"),
-            ("AFNodeTaskStep", "Task Step"),
-        ),
-    ),
-    (
-        "Task Analysis",
-        (
-            ("AFNodeEvaluateTaskDependencies", "Evaluate Object Dependencies"),
         ),
     ),
     (
@@ -92,7 +103,6 @@ NODE_MENU_GROUPS = (
     (
         "Inputs",
         (
-            ("AFNodePlaybackState", "Playback State"),
             ("AFNodeSceneTime", "Scene Time"),
             ("AFNodeStatusInput", "Status Input"),
             ("AFNodeFloatInput", "Float"),
@@ -125,6 +135,7 @@ NODE_MENU_GROUPS = (
             ("AFNodeConvertValue", "Convert"),
             ("AFNodeRandomValue", "Random Value"),
             ("AFNodePreviewData", "Preview Data"),
+            ("AFNodeGroup", "Group"),
         ),
     ),
     (
@@ -176,7 +187,7 @@ GROUP_ASSET_MENU_ENTRIES = (
 )
 
 NODE_MENU_SECTIONS = (
-    ("Task", ("Task", "Task Analysis")),
+    ("Task", ("Task Building", "Task Targets")),
     ("Scene", ("Scene Actions", "Collection & Object")),
     ("Math", ("Math", "Utilities", "Vector", "Rotation", "Matrix")),
 )

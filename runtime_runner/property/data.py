@@ -239,10 +239,6 @@ class RuntimePropertyDataMixin:
     def _modifier_property_definition_from_node(self, node):
         modifier_name_filter = str(self._input_string_forgiving(node, "Name", "") or "").strip()
         settings = _modifier_filter_settings_from_node(node, modifier_name_filter)
-        if bool(settings["filter_by_context"]):
-            context_filter_passed = bool(self._input_bool(node, "Context", True))
-        else:
-            context_filter_passed = True
         properties = {
             "show_viewport": bool(getattr(node, "capture_show_viewport", False)),
             "show_render": bool(getattr(node, "capture_show_render", False)),
@@ -256,11 +252,9 @@ class RuntimePropertyDataMixin:
             metadata={
                 "filter_by_type": bool(settings["filter_by_type"]),
                 "filter_by_name": bool(settings["filter_by_name"]),
-                "filter_by_context": bool(settings["filter_by_context"]),
                 "modifier_type_filter": str(settings["modifier_type_filter"]),
                 "modifier_name_filter": str(settings["modifier_name_filter"]),
                 "modifier_name_match_mode": str(settings["modifier_name_match_mode"]),
-                "context_filter_passed": bool(context_filter_passed),
             },
         )
 

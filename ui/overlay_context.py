@@ -65,6 +65,45 @@ def _node_editor_group_path(context):
     return _group_path_from_path_items(path_items)
 
 
+def _node_editor_group_path_labels(context):
+    space = getattr(context, "space_data", None)
+    path_items = _space_path_items(space)
+    labels = []
+    if path_items:
+        root_tree = _root_tree_from_path_items(path_items)
+        root_label = str(getattr(root_tree, "name", "") or "").strip()
+        if root_label:
+            labels.append(root_label)
+        previous_tree = _path_item_node_tree(path_items[0])
+        for item in path_items[1:]:
+            current_tree = _path_item_node_tree(item)
+            if current_tree is None:
+                continue
+            label = str(getattr(current_tree, "name", "") or "").strip()
+            if not label:
+                group_node = _resolve_group_path_node(previous_tree, current_tree, getattr(item, "node", None))
+                label = str(getattr(group_node, "name", "") or "").strip() if group_node is not None else ""
+            if label:
+                labels.append(label)
+            previous_tree = current_tree
+        return labels if len(labels) > 1 else []
+
+    root_tree = getattr(space, "node_tree", None) if space is not None else None
+    edit_tree = getattr(space, "edit_tree", None) if space is not None else None
+    if root_tree is None or edit_tree is None or root_tree == edit_tree:
+        return []
+    root_label = str(getattr(root_tree, "name", "") or "").strip()
+    if root_label:
+        labels.append(root_label)
+    group_node = _resolve_group_path_node(root_tree, edit_tree)
+    label = str(getattr(edit_tree, "name", "") or "").strip()
+    if not label:
+        label = str(getattr(group_node, "name", "") or "").strip() if group_node is not None else ""
+    if label:
+        labels.append(label)
+    return labels if len(labels) > 1 else []
+
+
 def _node_editor_root_tree(context, fallback_tree):
     space = getattr(context, "space_data", None)
     path_items = _space_path_items(space)

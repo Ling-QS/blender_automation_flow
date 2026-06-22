@@ -1,7 +1,7 @@
 import math
 import time
 
-from ..runtime_flow.helpers import _find_single_from_input_socket, _first_output_node, _is_flow_side_hook_node
+from ..runtime_flow.helpers import _find_single_from_input_socket, _first_output_node, _is_flow_side_hook_node, _scan_repeat_pairs
 from .overlay_drawing import _convex_hull, _inflate_polygon, _node_bounds, _paired_zone_node_bounds
 
 
@@ -265,7 +265,27 @@ def _collect_managed_overlay_pairs(node_tree, kind, start_type, end_type, child_
 
 
 def _collect_repeat_overlay_pairs(node_tree):
-    return _collect_managed_overlay_pairs(node_tree, "REPEAT", "AFNodeRepeatStart", "AFNodeRepeatEnd")
+    pairs = _collect_managed_overlay_pairs(node_tree, "REPEAT", "AFNodeRepeatStart", "AFNodeRepeatEnd")
+    if not pairs:
+        return pairs
+
+    context_validity = {}
+    valid_pairs = []
+    for pair in pairs:
+        context_nodes = _collect_linear_flow_context(pair.get("start_node"))
+        context_key = tuple(_overlay_node_key(node) for node in context_nodes)
+        if not context_key:
+            context_nodes = tuple(pair.get("path_nodes", ()) or ())
+            context_key = tuple(_overlay_node_key(node) for node in context_nodes)
+        if not context_key:
+            continue
+        is_valid = context_validity.get(context_key)
+        if is_valid is None:
+            is_valid = bool(_scan_repeat_pairs(context_nodes, lambda entry: entry).get("ok", False))
+            context_validity[context_key] = is_valid
+        if is_valid:
+            valid_pairs.append(pair)
+    return valid_pairs
 
 
 def _collect_execution_overlay_pairs(node_tree, control_pairs=None):

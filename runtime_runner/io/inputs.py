@@ -62,6 +62,44 @@ class RuntimeInputsMixin:
         snapshot["playing"] = bool(snapshot.get("playing", False))
         return snapshot
 
+    def _trigger_state_snapshot(self):
+        snapshot = dict(self.ui_context.get("trigger_state", {}) or {})
+        snapshot["manual"] = bool(snapshot.get("manual", False))
+        snapshot["scene_updating"] = bool(snapshot.get("scene_updating", False))
+        snapshot["on_scene_update_start"] = bool(snapshot.get("on_scene_update_start", False))
+        snapshot["on_scene_update_end"] = bool(snapshot.get("on_scene_update_end", False))
+        snapshot["object_interaction_mode"] = str(snapshot.get("object_interaction_mode", "") or "")
+        snapshot["viewport_shading_mode"] = str(snapshot.get("viewport_shading_mode", "") or "")
+        return snapshot
+
+    def _active_object_interaction_mode_snapshot(self):
+        snapshot = str(self.ui_context.get("object_interaction_mode", "") or "")
+        if snapshot:
+            return snapshot
+        try:
+            from ... import operators as operators_module
+
+            resolver = getattr(operators_module, "_active_object_interaction_mode", None)
+            if callable(resolver):
+                return str(resolver() or "")
+        except Exception:
+            pass
+        return ""
+
+    def _active_viewport_shading_mode_snapshot(self):
+        snapshot = str(self.ui_context.get("viewport_shading_mode", "") or "")
+        if snapshot:
+            return snapshot
+        try:
+            from ... import operators as operators_module
+
+            resolver = getattr(operators_module, "_active_viewport_shading_mode", None)
+            if callable(resolver):
+                return str(resolver() or "")
+        except Exception:
+            pass
+        return ""
+
     def _input_vector(self, node, input_name, fallback=(0.0, 0.0, 0.0)):
         linked = self._get_linked_output(node, input_name, "vector_value")
         if linked is not None:

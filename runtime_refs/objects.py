@@ -20,6 +20,15 @@ def _stored_property_package_key_for_tree_node(tree_name, node_name, stored_prop
 def _stored_property_package_key_for_node(node, stored_property_package_prop_prefix):
     tree = getattr(node, "id_data", None)
     tree_name = getattr(tree, "name_full", getattr(tree, "name", ""))
+    node_type = str(getattr(node, "bl_idname", "") or "")
+    if node_type == "AFNodeStorePropertyPackage":
+        store_asset_id = str(getattr(node, "store_asset_id", "") or "").strip()
+        if store_asset_id:
+            return _stored_property_package_key_for_tree_node(
+                tree_name,
+                store_asset_id,
+                stored_property_package_prop_prefix,
+            )
     return _stored_property_package_key_for_tree_node(
         tree_name,
         getattr(node, "name", ""),

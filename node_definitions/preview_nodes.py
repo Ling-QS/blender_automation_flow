@@ -490,6 +490,16 @@ def build_preview_node_classes(
                 return "(" + ", ".join(str(_format_preview_value(component)) for component in value) + ")"
             return str(tuple(value))
         if isinstance(value, dict):
+            if bool(value.get("__af_rotation__")):
+                quaternion = tuple(value.get("quaternion", ()))
+                quaternion_text = _format_preview_value(quaternion)
+                return f"Quat {quaternion_text}" if quaternion else "Quat"
+            if bool(value.get("__af_matrix__")):
+                rows = list(value.get("rows", []))
+                if rows:
+                    row_text = _format_preview_value(tuple(rows[0]))
+                    return f"Matrix[{row_text}]"
+                return "Matrix"
             mode = str(value.get("mode", "") or "")
             payload = value.get("value")
             if isinstance(payload, (list, tuple)):

@@ -31,6 +31,11 @@ MISSING_POLICY_ITEMS = (
     ("FAIL", "Fail", "Fail flow if object/modifier missing while restoring"),
 )
 
+REFRESH_PROPERTY_PACKAGE_RANGE_MODE_ITEMS = (
+    ("IN_SCOPE", "In Scope", "Refresh only the selected Object List and Property Definition range"),
+    ("OUT_OF_SCOPE", "Out of Scope", "Refresh everything outside the selected Object List and Property Definition range"),
+)
+
 PROPERTY_PACKAGE_STORE_MODE_ITEMS = (
     ("STORE_AND_OUTPUT", "Store", "Store the incoming Property Package on this node and output it"),
     ("OUTPUT_ONLY", "Output", "Ignore the incoming Property Package and output the previously stored one"),

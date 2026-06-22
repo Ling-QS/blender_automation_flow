@@ -284,17 +284,33 @@ def _stored_property_package_key_for_node(node):
     )
 
 
+def _legacy_stored_property_package_key_for_node(node):
+    tree = getattr(node, "id_data", None)
+    tree_name = getattr(tree, "name_full", getattr(tree, "name", ""))
+    return _stored_property_package_key_for_tree_node_impl(
+        tree_name,
+        getattr(node, "name", ""),
+        STORED_PROPERTY_PACKAGE_PROP_PREFIX,
+    )
+
+
 def _read_stored_property_package_direct(node, owner=None):
     owner = owner if owner is not None else node
     if owner is None:
         return None
-    raw = str(owner.get(_stored_property_package_key_for_node(node), "") or "").strip()
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    key_candidates = [_stored_property_package_key_for_node(node)]
+    legacy_key = _legacy_stored_property_package_key_for_node(node)
+    if legacy_key not in key_candidates:
+        key_candidates.append(legacy_key)
+    for key in key_candidates:
+        raw = str(owner.get(key, "") or "").strip()
+        if not raw:
+            continue
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+    return None
 
 
 def _fallback_group_instance_stored_property_package(node):
@@ -443,6 +459,16 @@ def _flow_toggle_cache_key(tree_name, node_name, group_path=None):
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
+def _boolean_state_cache_key(tree_name, node_name, state_kind, group_path=None):
+    payload = {
+        "tree_name": str(tree_name or ""),
+        "node_name": str(node_name or ""),
+        "state_kind": str(state_kind or ""),
+        "group_path": [dict(item) for item in list(group_path or []) if isinstance(item, dict)],
+    }
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+
 def _read_flow_toggle_cache(scene):
     if scene is None:
         return {}
@@ -464,6 +490,14 @@ def _write_flow_toggle_cache(scene, payload):
         scene[FLOW_TOGGLE_CACHE_PROP] = json.dumps(safe_payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     except Exception:
         pass
+
+
+def _read_boolean_state_cache(scene):
+    return _read_flow_toggle_cache(scene)
+
+
+def _write_boolean_state_cache(scene, payload):
+    _write_flow_toggle_cache(scene, payload)
 
 
 def _clear_flow_toggle_state(scene, tree_name, node_name, group_path=None, clear_all_paths=False):
@@ -512,7 +546,7 @@ def _has_stored_property_package(node, owner=None):
 
 
 def _clear_stored_property_package(node, owner=None):
-    key = _stored_property_package_key_for_node(node)
+    keys = {_stored_property_package_key_for_node(node), _legacy_stored_property_package_key_for_node(node)}
     cleared_count = 0
     visited_ids = set()
     owners = (owner,) if owner is not None else _iter_store_property_package_owners(node)
@@ -522,9 +556,10 @@ def _clear_stored_property_package(node, owner=None):
             continue
         visited_ids.add(owner_id)
         try:
-            if key in owner:
-                del owner[key]
-                cleared_count += 1
+            for key in keys:
+                if key in owner:
+                    del owner[key]
+                    cleared_count += 1
         except Exception:
             continue
     return cleared_count

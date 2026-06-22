@@ -270,6 +270,7 @@ def _property_package_to_definition(
     normalize_property_definition_entries,
     make_empty_property_definition,
     clone_property_definition,
+    sanitize_reusable_property_definition,
     validate_property_definition,
 ):
     package = validate_property_package(package, node_name)
@@ -285,6 +286,7 @@ def _property_package_to_definition(
                 normalize_property_definition_entries=normalize_property_definition_entries,
                 make_empty_property_definition=make_empty_property_definition,
                 clone_property_definition=clone_property_definition,
+                sanitize_reusable_property_definition=sanitize_reusable_property_definition,
                 validate_property_definition=validate_property_definition,
             )
             definitions.extend(iter_property_definition_entries(entry_definition, node_name))
@@ -292,7 +294,10 @@ def _property_package_to_definition(
     property_definition = package.get("metadata", {}).get("property_definition")
     if property_definition is None:
         return make_empty_property_definition(node_name)
-    return clone_property_definition(validate_property_definition(property_definition, node_name))
+    return sanitize_reusable_property_definition(
+        clone_property_definition(validate_property_definition(property_definition, node_name)),
+        node_name,
+    )
 
 
 def _property_package_has_property_content(

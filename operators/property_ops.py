@@ -81,6 +81,16 @@ def _quick_run_store_property_package(runner, node):
         raise FlowExecutionError("AF_E011", "Property Package input is not linked", node.name)
     _validate_property_package(property_package, node.name)
     runner._write_stored_property_package(node, property_package)
+    runner._invalidate_data_node_outputs()
+    try:
+        from ..node_system.tree import _refresh_runtime_data_dependents
+
+        _refresh_runtime_data_dependents(
+            getattr(node, "id_data", None),
+            invalidate_active_runner=False,
+        )
+    except Exception:
+        pass
     if any(
         str(entry.get("package_role", "") or "") == PROPERTY_PACKAGE_ROLE_SNAPSHOT
         and str(entry.get("scope_kind", "") or "") == PROPERTY_PACKAGE_SCOPE_MODIFIER
@@ -371,7 +381,12 @@ class AF_OT_ClearStoredPropertyPackage(bpy.types.Operator):
         except Exception as exc:
             self.report({"ERROR"}, f"Failed to clear stored Property Package: {exc}")
             return {"CANCELLED"}
-        _tag_flow_node_editor_redraw(None)
+        try:
+            from ..node_system.tree import _refresh_runtime_data_dependents
+
+            _refresh_runtime_data_dependents(node_tree)
+        except Exception:
+            _tag_flow_node_editor_redraw(None)
         if cleared_count <= 0:
             self.report({"INFO"}, "No stored Property Package data to clear")
             return {"CANCELLED"}

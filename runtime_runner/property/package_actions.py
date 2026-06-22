@@ -13,6 +13,7 @@ from ...runtime_property.definitions import (
     _iter_property_definition_entries,
     _make_empty_property_definition,
     _normalize_property_definition_entries,
+    _sanitize_reusable_property_definition,
     _validate_property_definition,
 )
 from ...runtime_property.packages import (
@@ -48,6 +49,7 @@ class RuntimePropertyPackageActionsMixin:
             normalize_property_definition_entries=_normalize_property_definition_entries,
             make_empty_property_definition=_make_empty_property_definition,
             clone_property_definition=_clone_property_definition,
+            sanitize_reusable_property_definition=_sanitize_reusable_property_definition,
             validate_property_definition=_validate_property_definition,
         )
 
@@ -81,6 +83,16 @@ class RuntimePropertyPackageActionsMixin:
             self._validate_property_package(property_package, node.name)
             if not dry_run:
                 self._write_stored_property_package(node, property_package)
+                self._invalidate_data_node_outputs()
+                try:
+                    from ...node_system.tree import _refresh_runtime_data_dependents
+
+                    _refresh_runtime_data_dependents(
+                        getattr(node, "id_data", None),
+                        invalidate_active_runner=False,
+                    )
+                except Exception:
+                    pass
         else:
             property_package = self._read_stored_property_package(node)
             if property_package is None:
@@ -116,6 +128,11 @@ class RuntimePropertyPackageActionsMixin:
                 raise FlowExecutionError("AF_E011", "Property Package input is not linked", node.name)
             property_definition = self._property_package_to_definition_for_actions(property_package, node.name)
             report = self._apply_property_package(node, property_definition, property_package, object_list, dry_run=dry_run)
+        report["count"] = int(report.get("count", 0) or 0)
+        report["applied_count"] = int(report.get("applied_count", report["count"]) or 0)
+        report["matched_item_count"] = int(report.get("matched_item_count", 0) or 0)
+        report["missing_object_count"] = int(report.get("missing_object_count", 0) or 0)
+        report["missing_component_count"] = int(report.get("missing_component_count", 0) or 0)
         report["object_count"] = int(object_list.get("count", 0))
         report["dry_run"] = bool(dry_run)
         report["apply_mode"] = apply_mode

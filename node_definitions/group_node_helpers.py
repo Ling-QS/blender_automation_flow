@@ -236,7 +236,14 @@ def build_group_node_helpers(
         string_types = {"AFSocketString", "NodeSocketString"}
         return bool(socket_type_a) and bool(socket_type_b) and socket_type_a in string_types and socket_type_b in string_types
 
-    def _restore_dynamic_socket_state(node, direction, state, socket_specs, restore_default_values=True):
+    def _restore_dynamic_socket_state(
+        node,
+        direction,
+        state,
+        socket_specs,
+        restore_default_values=True,
+        restore_hide_state=True,
+    ):
         del socket_specs
         sockets = list(node.inputs if direction == "INPUT" else node.outputs)
         node_tree = getattr(node, "id_data", None)
@@ -311,10 +318,11 @@ def build_group_node_helpers(
                         node_tree.links.new(socket, other_socket)
                 except Exception:
                     continue
-            try:
-                socket.hide = bool(old_state.get("hide", False))
-            except Exception:
-                pass
+            if restore_hide_state:
+                try:
+                    socket.hide = bool(old_state.get("hide", False))
+                except Exception:
+                    pass
 
     def _capture_group_socket_state(node, direction, socket_specs):
         sockets = node.inputs if direction == "INPUT" else node.outputs

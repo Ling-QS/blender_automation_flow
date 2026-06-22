@@ -27,6 +27,7 @@ from ...runtime_property.definitions import (
     _iter_property_definition_entries,
     _make_empty_property_definition,
     _normalize_property_definition_entries,
+    _sanitize_reusable_property_definition,
     _validate_property_definition,
 )
 from ...runtime_property.packages import (
@@ -310,6 +311,7 @@ class RuntimePropertyPackageBakeRecordMixin:
             normalize_property_definition_entries=_normalize_property_definition_entries,
             make_empty_property_definition=_make_empty_property_definition,
             clone_property_definition=_clone_property_definition,
+            sanitize_reusable_property_definition=_sanitize_reusable_property_definition,
             validate_property_definition=_validate_property_definition,
         )
 

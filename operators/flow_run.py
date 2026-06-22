@@ -17,6 +17,10 @@ _AUTO_FOLLOW_PLAYBACK_TIMER_ENABLED = False
 _AUTO_FOLLOW_SUSPEND_DEPTH = 0
 _AUTO_FOLLOW_IGNORE_UNTIL = 0.0
 _AUTO_FOLLOW_LAST_PLAY_STATE = None
+_AUTO_FOLLOW_SCENE_UPDATE_STATE = {}
+_AUTO_FOLLOW_SCENE_UPDATE_END_PENDING = {}
+_AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE = ""
+_AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE = ""
 _AUTO_FOLLOW_START_CACHE = {
     "entries": (),
     "dirty": True,
@@ -352,6 +356,25 @@ def _playback_state_payload(playing=False, on_play=False, on_pause=False):
     }
 
 
+def _trigger_state_payload(
+    *,
+    manual=False,
+    scene_updating=False,
+    on_scene_update_start=False,
+    on_scene_update_end=False,
+    object_interaction_mode="",
+    viewport_shading_mode="",
+):
+    return {
+        "manual": bool(manual),
+        "scene_updating": bool(scene_updating),
+        "on_scene_update_start": bool(on_scene_update_start),
+        "on_scene_update_end": bool(on_scene_update_end),
+        "object_interaction_mode": str(object_interaction_mode or ""),
+        "viewport_shading_mode": str(viewport_shading_mode or ""),
+    }
+
+
 def _merge_playback_state_payload(base_payload, extra_payload):
     base = dict(base_payload or {})
     extra = dict(extra_payload or {})
@@ -359,6 +382,27 @@ def _merge_playback_state_payload(base_payload, extra_payload):
         "playing": bool(extra.get("playing", base.get("playing", False))),
         "on_play": bool(base.get("on_play", False)) or bool(extra.get("on_play", False)),
         "on_pause": bool(base.get("on_pause", False)) or bool(extra.get("on_pause", False)),
+    }
+
+
+def _merge_trigger_state_payload(base_payload, extra_payload):
+    base = dict(base_payload or {})
+    extra = dict(extra_payload or {})
+    merged_object_interaction_mode = str(base.get("object_interaction_mode", "") or "")
+    extra_object_interaction_mode = str(extra.get("object_interaction_mode", "") or "")
+    if extra_object_interaction_mode:
+        merged_object_interaction_mode = extra_object_interaction_mode
+    merged_viewport_shading_mode = str(base.get("viewport_shading_mode", "") or "")
+    extra_viewport_shading_mode = str(extra.get("viewport_shading_mode", "") or "")
+    if extra_viewport_shading_mode:
+        merged_viewport_shading_mode = extra_viewport_shading_mode
+    return {
+        "manual": bool(base.get("manual", False)) or bool(extra.get("manual", False)),
+        "scene_updating": bool(base.get("scene_updating", False)) or bool(extra.get("scene_updating", False)),
+        "on_scene_update_start": bool(base.get("on_scene_update_start", False)) or bool(extra.get("on_scene_update_start", False)),
+        "on_scene_update_end": bool(base.get("on_scene_update_end", False)) or bool(extra.get("on_scene_update_end", False)),
+        "object_interaction_mode": merged_object_interaction_mode,
+        "viewport_shading_mode": merged_viewport_shading_mode,
     }
 
 
@@ -403,7 +447,181 @@ def _consume_scene_playback_edge(scene, playback_state, now=None):
     return payload
 
 
-def _queue_auto_follow_for_scene(scene, playback_state=None, ignore_debounce=False):
+def _scene_update_state(scene_name):
+    state = _AUTO_FOLLOW_SCENE_UPDATE_STATE.get(scene_name)
+    if not isinstance(state, dict):
+        state = {
+            "burst_active": False,
+            "last_dirty_at": 0.0,
+        }
+    return state
+
+
+def _mark_scene_update_activity(scene, now=None):
+    if scene is None:
+        return _trigger_state_payload()
+    if now is None:
+        now = time.monotonic()
+    scene_name = str(getattr(scene, "name", "") or "")
+    if not scene_name:
+        return _trigger_state_payload()
+    state = _scene_update_state(scene_name)
+    on_start = not bool(state.get("burst_active", False))
+    state["burst_active"] = True
+    state["last_dirty_at"] = float(now)
+    _AUTO_FOLLOW_SCENE_UPDATE_STATE[scene_name] = state
+    _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.pop(scene_name, None)
+    return _trigger_state_payload(
+        scene_updating=True,
+        on_scene_update_start=on_start,
+    )
+
+
+def _scene_update_end_due_scenes(now=None):
+    if now is None:
+        now = time.monotonic()
+    due = []
+    for scene_name, state in list(_AUTO_FOLLOW_SCENE_UPDATE_STATE.items()):
+        if not isinstance(state, dict) or not bool(state.get("burst_active", False)):
+            continue
+        scene = bpy.data.scenes.get(str(scene_name or ""))
+        if scene is None or _scene_flow_settings(scene) is None:
+            _AUTO_FOLLOW_SCENE_UPDATE_STATE.pop(scene_name, None)
+            _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.pop(scene_name, None)
+            continue
+        last_dirty_at = float(state.get("last_dirty_at", 0.0) or 0.0)
+        debounce_seconds = _auto_follow_debounce_seconds(scene=scene, default_debounce_ms=300)
+        if float(now) < last_dirty_at + debounce_seconds:
+            continue
+        if bool(_AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.get(scene_name, False)):
+            continue
+        _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING[scene_name] = True
+        due.append(scene)
+    return due
+
+
+def _consume_scene_update_end(scene):
+    if scene is None:
+        return None
+    scene_name = str(getattr(scene, "name", "") or "")
+    if not scene_name:
+        return None
+    state = _scene_update_state(scene_name)
+    if not bool(state.get("burst_active", False)):
+        return None
+    state["burst_active"] = False
+    _AUTO_FOLLOW_SCENE_UPDATE_STATE[scene_name] = state
+    _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.pop(scene_name, None)
+    return _trigger_state_payload(
+        on_scene_update_end=True,
+    )
+
+
+def _normalize_object_interaction_mode(raw_mode):
+    mode = str(raw_mode or "").strip().upper()
+    if mode.startswith("EDIT"):
+        return "EDIT"
+    if mode == "PAINT_WEIGHT":
+        return "WEIGHT_PAINT"
+    if mode == "PAINT_VERTEX":
+        return "VERTEX_PAINT"
+    if mode == "PAINT_TEXTURE":
+        return "TEXTURE_PAINT"
+    if mode in {"OBJECT", "SCULPT", "POSE", "WEIGHT_PAINT", "VERTEX_PAINT", "TEXTURE_PAINT"}:
+        return mode
+    return ""
+
+
+def _active_object_interaction_mode():
+    normalized = _normalize_object_interaction_mode(getattr(bpy.context, "mode", ""))
+    if normalized:
+        return normalized
+    view_layer = getattr(bpy.context, "view_layer", None)
+    objects = getattr(view_layer, "objects", None) if view_layer is not None else None
+    active_object = getattr(objects, "active", None) if objects is not None else None
+    return _normalize_object_interaction_mode(getattr(active_object, "mode", ""))
+
+
+def _active_viewport_shading_mode():
+    area = getattr(bpy.context, "area", None)
+    space_data = getattr(bpy.context, "space_data", None)
+    if getattr(area, "type", "") == "VIEW_3D" and getattr(space_data, "type", "") == "VIEW_3D":
+        shading = getattr(space_data, "shading", None)
+        return str(getattr(shading, "type", "") or "")
+    window = getattr(bpy.context, "window", None)
+    screen = getattr(window, "screen", None) if window is not None else None
+    if screen is not None:
+        for candidate_area in getattr(screen, "areas", []):
+            if getattr(candidate_area, "type", "") != "VIEW_3D":
+                continue
+            for candidate_space in getattr(candidate_area, "spaces", []):
+                if getattr(candidate_space, "type", "") != "VIEW_3D":
+                    continue
+                shading = getattr(candidate_space, "shading", None)
+                return str(getattr(shading, "type", "") or "")
+    return ""
+
+
+def _active_auto_follow_scene():
+    window = getattr(bpy.context, "window", None)
+    scene = getattr(window, "scene", None) if window is not None else None
+    if scene is not None and _scene_flow_settings(scene) is not None:
+        return scene
+    scene = getattr(bpy.context, "scene", None)
+    if scene is not None and _scene_flow_settings(scene) is not None:
+        return scene
+    return None
+
+
+def _prime_interaction_trigger_state():
+    global _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE, _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE
+    _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE = _active_object_interaction_mode()
+    _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE = _active_viewport_shading_mode()
+
+
+def _poll_interaction_trigger_state_once():
+    global _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE, _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE
+    current_object_mode = _active_object_interaction_mode()
+    current_viewport_shading = _active_viewport_shading_mode()
+    target_scene = _active_auto_follow_scene()
+
+    last_object_mode = str(_AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE or "")
+    if current_object_mode != last_object_mode:
+        if current_object_mode and target_scene is not None:
+            trigger_state = _trigger_state_payload(object_interaction_mode=current_object_mode)
+            _handle_auto_follow_scene_trigger(
+                target_scene,
+                prefer_immediate=True,
+                trigger_state=trigger_state,
+                ignore_debounce=True,
+            )
+        _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE = current_object_mode
+
+    last_viewport_shading = str(_AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE or "")
+    if current_viewport_shading != last_viewport_shading:
+        if current_viewport_shading and target_scene is not None:
+            trigger_state = _trigger_state_payload(viewport_shading_mode=current_viewport_shading)
+            _handle_auto_follow_scene_trigger(
+                target_scene,
+                prefer_immediate=True,
+                trigger_state=trigger_state,
+                ignore_debounce=True,
+            )
+        _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE = current_viewport_shading
+
+    for scene in _scene_update_end_due_scenes():
+        trigger_state = _consume_scene_update_end(scene)
+        if trigger_state is None:
+            continue
+        _handle_auto_follow_scene_trigger(
+            scene,
+            prefer_immediate=True,
+            trigger_state=trigger_state,
+            ignore_debounce=True,
+        )
+
+
+def _queue_auto_follow_for_scene(scene, playback_state=None, trigger_state=None, ignore_debounce=False):
     if scene is None:
         return
     if _scene_flow_settings(scene) is None:
@@ -415,6 +633,10 @@ def _queue_auto_follow_for_scene(scene, playback_state=None, ignore_debounce=Fal
         playback_state,
     )
     queued_playback_state = _consume_scene_playback_edge(scene, queued_playback_state, now=now)
+    queued_trigger_state = _merge_trigger_state_payload(
+        _trigger_state_payload(),
+        trigger_state,
+    )
     for node_tree, node in _iter_auto_follow_start_nodes():
         key = _auto_follow_entry_key(scene_name, getattr(node_tree, "name", ""), getattr(node, "name", ""))
         existing = _AUTO_FOLLOW_PENDING_STARTS.get(key)
@@ -422,6 +644,10 @@ def _queue_auto_follow_for_scene(scene, playback_state=None, ignore_debounce=Fal
         merged_playback_state = _merge_playback_state_payload(
             existing.get("playback_state") if isinstance(existing, dict) else None,
             queued_playback_state,
+        )
+        merged_trigger_state = _merge_trigger_state_payload(
+            existing.get("trigger_state") if isinstance(existing, dict) else None,
+            queued_trigger_state,
         )
         _AUTO_FOLLOW_PENDING_STARTS[key] = {
             "scene_name": scene_name,
@@ -431,6 +657,7 @@ def _queue_auto_follow_for_scene(scene, playback_state=None, ignore_debounce=Fal
             "first_dirty_at": float(first_dirty_at),
             "last_dirty_at": float(now),
             "playback_state": merged_playback_state,
+            "trigger_state": merged_trigger_state,
             "ignore_debounce": (
                 bool(ignore_debounce)
                 or (bool(existing.get("ignore_debounce", False)) if isinstance(existing, dict) else False)
@@ -546,6 +773,7 @@ def _ensure_auto_follow_playback_timer():
 
         current_state = bool(_is_animation_playing())
         _poll_auto_follow_playback_state_once(current_state=current_state)
+        _poll_interaction_trigger_state_once()
         return 0.05 if current_state else 0.1
 
     _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE = True
@@ -654,12 +882,16 @@ def _process_auto_follow_queue_once(ignore_debounce=False):
     _auto_order, _dirty_at, key, scene, node_tree, start_node_name = ready_entries[0]
     entry = dict(_AUTO_FOLLOW_PENDING_STARTS.get(key) or {})
     playback_state = dict(entry.get("playback_state") or {})
+    trigger_state = dict(entry.get("trigger_state") or {})
     try:
         _start_runner(
             node_tree,
             scene,
             start_node_name=start_node_name,
-            ui_context={"playback_state": playback_state},
+            ui_context={
+                "playback_state": playback_state,
+                "trigger_state": trigger_state,
+            },
             auto_follow=True,
         )
         _ensure_resume_runner_timer()
@@ -745,11 +977,13 @@ configure_reload_resume_callbacks(
 
 
 def _clear_auto_follow_state():
-    global _AUTO_FOLLOW_TIMER_ACTIVE, _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE, _AUTO_FOLLOW_TIMER_GENERATION, _AUTO_FOLLOW_PLAYBACK_TIMER_GENERATION, _AUTO_FOLLOW_SUSPEND_DEPTH, _AUTO_FOLLOW_IGNORE_UNTIL, _AUTO_FOLLOW_LAST_PLAY_STATE
+    global _AUTO_FOLLOW_TIMER_ACTIVE, _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE, _AUTO_FOLLOW_TIMER_GENERATION, _AUTO_FOLLOW_PLAYBACK_TIMER_GENERATION, _AUTO_FOLLOW_SUSPEND_DEPTH, _AUTO_FOLLOW_IGNORE_UNTIL, _AUTO_FOLLOW_LAST_PLAY_STATE, _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE, _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE
     _AUTO_FOLLOW_PENDING_STARTS.clear()
     _mark_auto_follow_start_cache_dirty()
     _AUTO_FOLLOW_SCENE_EDGE_GUARD.clear()
     _AUTO_FOLLOW_POST_RUN_DEPSGRAPH_GUARD.clear()
+    _AUTO_FOLLOW_SCENE_UPDATE_STATE.clear()
+    _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.clear()
     _AUTO_FOLLOW_TIMER_ACTIVE = False
     _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE = False
     _AUTO_FOLLOW_TIMER_GENERATION += 1
@@ -757,12 +991,15 @@ def _clear_auto_follow_state():
     _AUTO_FOLLOW_SUSPEND_DEPTH = 0
     _AUTO_FOLLOW_IGNORE_UNTIL = 0.0
     _AUTO_FOLLOW_LAST_PLAY_STATE = None
+    _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE = ""
+    _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE = ""
 
 
 @persistent
 def _reset_auto_follow_after_load(_dummy):
     _clear_auto_follow_state()
     _prime_auto_follow_playback_state()
+    _prime_interaction_trigger_state()
     if _AUTO_FOLLOW_PLAYBACK_TIMER_ENABLED:
         _ensure_auto_follow_playback_timer()
 
@@ -780,6 +1017,7 @@ def _auto_follow_depsgraph_post(scene, _depsgraph):
         return
     just_paused = bool(_AUTO_FOLLOW_LAST_PLAY_STATE)
     _AUTO_FOLLOW_LAST_PLAY_STATE = False
+    trigger_state = _mark_scene_update_activity(scene)
     playback_state = _playback_state_payload(
         playing=False,
         on_play=False,
@@ -789,11 +1027,12 @@ def _auto_follow_depsgraph_post(scene, _depsgraph):
         scene,
         prefer_immediate=True,
         playback_state=playback_state,
+        trigger_state=trigger_state,
         ignore_debounce=True,
     )
 
 
-def _handle_auto_follow_scene_trigger(scene, prefer_immediate=False, playback_state=None, ignore_debounce=False):
+def _handle_auto_follow_scene_trigger(scene, prefer_immediate=False, playback_state=None, trigger_state=None, ignore_debounce=False):
     if _AUTO_FOLLOW_SUSPEND_DEPTH > 0:
         return
     if float(time.monotonic()) < float(_AUTO_FOLLOW_IGNORE_UNTIL):
@@ -803,6 +1042,7 @@ def _handle_auto_follow_scene_trigger(scene, prefer_immediate=False, playback_st
     _queue_auto_follow_for_scene(
         scene,
         playback_state=playback_state,
+        trigger_state=trigger_state,
         ignore_debounce=bool(ignore_debounce),
     )
     if bool(prefer_immediate) and _run_auto_follow_queue_now(ignore_debounce=bool(ignore_debounce)):
@@ -821,6 +1061,9 @@ def _auto_follow_frame_change_post(scene, _depsgraph=None):
         return
     on_play = bool(_AUTO_FOLLOW_LAST_PLAY_STATE is False)
     _AUTO_FOLLOW_LAST_PLAY_STATE = True
+    if on_play:
+        _AUTO_FOLLOW_SCENE_UPDATE_STATE.clear()
+        _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.clear()
     _handle_auto_follow_scene_trigger(
         scene,
         prefer_immediate=True,
@@ -829,6 +1072,7 @@ def _auto_follow_frame_change_post(scene, _depsgraph=None):
             on_play=on_play,
             on_pause=False,
         ),
+        trigger_state=_trigger_state_payload(),
         ignore_debounce=True,
     )
 
@@ -868,6 +1112,7 @@ def set_auto_follow_playback_timer_enabled(enabled):
     _AUTO_FOLLOW_PLAYBACK_TIMER_ENABLED = bool(enabled)
     if _AUTO_FOLLOW_PLAYBACK_TIMER_ENABLED:
         _prime_auto_follow_playback_state()
+        _prime_interaction_trigger_state()
         _ensure_auto_follow_playback_timer()
 
 

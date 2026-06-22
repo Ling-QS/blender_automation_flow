@@ -7,6 +7,8 @@ from .menu_config import (
     FLOW_MENU_REGULAR_NODES,
     FLOW_PROCESS_MENU_LABEL,
     FLOW_STRUCTURES_MENU_LABEL,
+    FLOW_MENU_TRIGGER_NODES,
+    FLOW_TRIGGER_MENU_LABEL,
     GROUP_ASSET_MENU_ENTRIES,
     GROUP_ASSET_MENU_TITLE,
     NODE_MENU_GROUPS,
@@ -102,6 +104,7 @@ class AF_MT_AddFlowNodes(bpy.types.Menu):
         layout = self.layout
         layout.menu(AF_MT_AddFlowRegularNodes.bl_idname, text=iface_(FLOW_PROCESS_MENU_LABEL))
         layout.menu(AF_MT_AddFlowPairedNodes.bl_idname, text=iface_(FLOW_STRUCTURES_MENU_LABEL))
+        layout.menu(AF_MT_AddFlowTriggerNodes.bl_idname, text=iface_(FLOW_TRIGGER_MENU_LABEL))
 
 
 class AF_MT_AddPropertyNodes(bpy.types.Menu):
@@ -133,6 +136,16 @@ class AF_MT_AddFlowPairedNodes(bpy.types.Menu):
     def draw(self, context):
         del context
         _draw_add_node_entries(self.layout, FLOW_MENU_PAIRED_NODES)
+
+
+class AF_MT_AddFlowTriggerNodes(bpy.types.Menu):
+    bl_idname = "AF_MT_add_flow_trigger_nodes"
+    bl_label = FLOW_TRIGGER_MENU_LABEL
+    bl_translation_context = "*"
+
+    def draw(self, context):
+        del context
+        _draw_add_node_entries(self.layout, FLOW_MENU_TRIGGER_NODES)
 
 
 class AF_MT_AddPropertyContextNodes(bpy.types.Menu):
@@ -236,6 +249,7 @@ MENU_CLASSES = (
     AF_MT_AddFlowNodes,
     AF_MT_AddFlowRegularNodes,
     AF_MT_AddFlowPairedNodes,
+    AF_MT_AddFlowTriggerNodes,
     AF_MT_AddPropertyNodes,
     AF_MT_AddPropertyContextNodes,
     AF_MT_AddPropertyPackageNodes,

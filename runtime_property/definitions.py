@@ -52,6 +52,13 @@ def _modifier_filter_settings_from_node(node, name_filter_text=""):
     }
 
 
+def _sanitize_modifier_definition_metadata(metadata):
+    sanitized_metadata = copy.deepcopy(dict(metadata or {}))
+    sanitized_metadata.pop("filter_by_context", None)
+    sanitized_metadata.pop("context_filter_passed", None)
+    return sanitized_metadata
+
+
 def _matches_modifier_filter(modifier, modifier_filter):
     if modifier_filter == "ALL":
         return True
@@ -160,6 +167,7 @@ def _make_empty_property_definition(source_node=""):
 
 
 def _property_definition_signature(property_definition):
+    property_definition = _sanitize_reusable_property_definition(property_definition, str(property_definition.get("source_node", "") or "Definition"))
     definition_kind = str(property_definition.get("definition_kind", "") or "")
     scope_kind = str(property_definition.get("scope_kind", "") or "")
     metadata = dict(property_definition.get("metadata", {}) or {})
@@ -170,7 +178,6 @@ def _property_definition_signature(property_definition):
             scope_kind,
             bool(settings["filter_by_type"]),
             bool(settings["filter_by_name"]),
-            bool(settings["filter_by_context"]),
             str(settings["modifier_type_filter"]),
             str(settings["modifier_name_filter"]),
             str(settings["modifier_name_match_mode"]),
@@ -280,7 +287,12 @@ def _iter_property_assignment_entries(property_assignment, node_name, allow_kind
 def _normalize_property_definition_entries(source_node, entries):
     flattened_entries = []
     for entry in entries or []:
-        flattened_entries.extend(_iter_property_definition_entries(entry, source_node))
+        flattened_entries.extend(
+            _iter_property_definition_entries(
+                _sanitize_reusable_property_definition(entry, source_node),
+                source_node,
+            )
+        )
     if not flattened_entries:
         return _make_empty_property_definition(source_node)
 
@@ -305,10 +317,10 @@ def _normalize_property_definition_entries(source_node, entries):
                 raise FlowExecutionError("AF_E020", "Cannot merge Modifier Property Definitions with different Modifier Name values", source_node)
             if str(current_settings["modifier_name_match_mode"]) != str(new_settings["modifier_name_match_mode"]):
                 raise FlowExecutionError("AF_E020", "Cannot merge Modifier Property Definitions with different Name Match values", source_node)
-            if bool(current_settings["filter_by_context"]) != bool(new_settings["filter_by_context"]):
-                raise FlowExecutionError("AF_E020", "Cannot merge Modifier Property Definitions with different Context Filter values", source_node)
         existing_metadata = existing.setdefault("metadata", {})
         entry_metadata = dict(entry.get("metadata", {}) or {})
+        if signature[0] == PROPERTY_DEFINITION_KIND_MODIFIER:
+            entry_metadata = _sanitize_modifier_definition_metadata(entry_metadata)
         entry_metadata["count"] = len([key for key, enabled in existing_props.items() if bool(enabled)])
         existing_metadata.update(copy.deepcopy(entry_metadata))
     normalized = [merged_map[key] for key in ordered_keys]
@@ -439,8 +451,54 @@ def _property_definition_has_content(property_definition, node_name):
     return len(_iter_property_definition_entries(property_definition, node_name)) > 0
 
 
-def _property_definition_to_assignment(property_definition, node_name, source_mode=PROPERTY_SOURCE_CURRENT):
+def _sanitize_property_assignment_for_definition_export(property_assignment, node_name):
+    property_assignment = _validate_property_assignment(property_assignment, node_name)
+    if _is_composite_property_assignment(property_assignment):
+        sanitized_entries = [
+            _sanitize_property_assignment_for_definition_export(entry, node_name)
+            for entry in list(property_assignment.get("entries", []))
+        ]
+        return _make_composite_property_assignment(
+            str(property_assignment.get("source_node", "") or node_name),
+            sanitized_entries,
+            metadata=copy.deepcopy(dict(property_assignment.get("metadata", {}) or {})),
+        )
+
+    sanitized_assignment = _clone_property_assignment(property_assignment)
+    if str(sanitized_assignment.get("assignment_kind", "") or "") != PROPERTY_ASSIGNMENT_KIND_MODIFIER:
+        return sanitized_assignment
+
+    sanitized_assignment["metadata"] = _sanitize_modifier_definition_metadata(
+        sanitized_assignment.get("metadata", {})
+    )
+    return sanitized_assignment
+
+
+def _sanitize_reusable_property_definition(property_definition, node_name):
     property_definition = _validate_property_definition(property_definition, node_name)
+    if _is_composite_property_definition(property_definition):
+        sanitized_entries = [
+            _sanitize_reusable_property_definition(entry, node_name)
+            for entry in list(property_definition.get("entries", []))
+        ]
+        return _make_composite_property_definition(
+            str(property_definition.get("source_node", "") or node_name),
+            sanitized_entries,
+            metadata=copy.deepcopy(dict(property_definition.get("metadata", {}) or {})),
+        )
+
+    sanitized_definition = _clone_property_definition(property_definition)
+    if str(sanitized_definition.get("definition_kind", "") or "") != PROPERTY_DEFINITION_KIND_MODIFIER:
+        return sanitized_definition
+
+    sanitized_definition["metadata"] = _sanitize_modifier_definition_metadata(
+        sanitized_definition.get("metadata", {})
+    )
+    return sanitized_definition
+
+
+def _property_definition_to_assignment(property_definition, node_name, source_mode=PROPERTY_SOURCE_CURRENT):
+    property_definition = _sanitize_reusable_property_definition(property_definition, node_name)
     if _is_composite_property_definition(property_definition):
         converted_entries = [
             _property_definition_to_assignment(entry, node_name, source_mode=source_mode)
@@ -472,7 +530,7 @@ def _property_definition_to_assignment(property_definition, node_name, source_mo
 
 
 def _property_assignment_to_definition_payload(property_assignment, node_name):
-    property_assignment = _validate_property_assignment(property_assignment, node_name)
+    property_assignment = _sanitize_property_assignment_for_definition_export(property_assignment, node_name)
     if _is_composite_property_assignment(property_assignment):
         converted_entries = [
             _property_assignment_to_definition_payload(entry, node_name)

@@ -19,15 +19,11 @@ def build_property_data_node_classes(
     OBJECT_ROTATION_MODE_ITEMS,
     PROPERTY_DATA_OUTPUT_MODE_ITEMS,
     PROPERTY_VALUE_SOURCE_ITEMS,
-    _OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS,
-    _apply_property_data_socket_visibility,
     _draw_modifier_property_assignment_fields,
     _draw_object_display_property_assignment_fields,
     _draw_object_transform_property_assignment_fields,
     _hide_default_auxiliary_outputs,
-    _initialize_object_transform_property_input_defaults,
     _persist_property_data_manual_hidden_keys,
-    _property_data_output_specs,
     _property_data_update_socket_layout,
     _refresh_property_data_socket_visibility,
     _resolve_property_data_manual_hidden_keys,
@@ -35,6 +31,28 @@ def build_property_data_node_classes(
     _sync_object_transform_property_data_sockets,
     _sync_property_data_node_sockets,
 ):
+    def _sync_property_data_node_instance(node, manual_hidden_keys=None):
+        if getattr(node, "bl_idname", "") == "AFNodeObjectTransformPropertyData":
+            _sync_object_transform_property_data_sockets(node, manual_hidden_keys=manual_hidden_keys)
+        else:
+            _sync_property_data_node_sockets(node, manual_hidden_keys=manual_hidden_keys)
+
+    def _initialize_property_data_node(node):
+        _sync_property_data_node_instance(node)
+        _hide_default_auxiliary_outputs(node)
+        _set_default_node_width(node, multiplier=(4.0 / 3.0))
+
+    def _draw_property_data_node_buttons(node, layout, draw_fields_fn):
+        _persist_property_data_manual_hidden_keys(node)
+        _refresh_property_data_socket_visibility(node)
+        layout.prop(node, "output_mode", expand=True)
+        draw_fields_fn(layout, node, "Property Fields")
+
+    def _update_property_data_node(node):
+        _persist_property_data_manual_hidden_keys(node)
+        manual_hidden_keys = _resolve_property_data_manual_hidden_keys(node)
+        _sync_property_data_node_instance(node, manual_hidden_keys=manual_hidden_keys)
+
     class AFNodeModifierPropertyData(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeModifierPropertyData"
         bl_label = "Modifier Property Data"
@@ -58,20 +76,14 @@ def build_property_data_node_classes(
 
         def init(self, context):
             del context
-            _sync_property_data_node_sockets(self)
-            _hide_default_auxiliary_outputs(self)
-            _set_default_node_width(self, multiplier=(4.0 / 3.0))
+            _initialize_property_data_node(self)
 
         def draw_buttons(self, context, layout):
             del context
-            _persist_property_data_manual_hidden_keys(self)
-            _refresh_property_data_socket_visibility(self)
-            layout.prop(self, "output_mode", expand=True)
-            _draw_modifier_property_assignment_fields(layout, self, "Property Fields")
+            _draw_property_data_node_buttons(self, layout, _draw_modifier_property_assignment_fields)
 
         def update(self):
-            manual_hidden_keys = _resolve_property_data_manual_hidden_keys(self)
-            _sync_property_data_node_sockets(self, manual_hidden_keys=manual_hidden_keys)
+            _update_property_data_node(self)
 
     class AFNodeObjectDisplayPropertyData(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeObjectDisplayPropertyData"
@@ -100,20 +112,14 @@ def build_property_data_node_classes(
 
         def init(self, context):
             del context
-            _sync_property_data_node_sockets(self)
-            _hide_default_auxiliary_outputs(self)
-            _set_default_node_width(self, multiplier=(4.0 / 3.0))
+            _initialize_property_data_node(self)
 
         def draw_buttons(self, context, layout):
             del context
-            _persist_property_data_manual_hidden_keys(self)
-            _refresh_property_data_socket_visibility(self)
-            layout.prop(self, "output_mode", expand=True)
-            _draw_object_display_property_assignment_fields(layout, self, "Property Fields")
+            _draw_property_data_node_buttons(self, layout, _draw_object_display_property_assignment_fields)
 
         def update(self):
-            manual_hidden_keys = _resolve_property_data_manual_hidden_keys(self)
-            _sync_property_data_node_sockets(self, manual_hidden_keys=manual_hidden_keys)
+            _update_property_data_node(self)
 
     class AFNodeObjectTransformPropertyData(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeObjectTransformPropertyData"
@@ -142,25 +148,14 @@ def build_property_data_node_classes(
 
         def init(self, context):
             del context
-            for socket_idname, socket_name in _OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS:
-                self.inputs.new(socket_idname, socket_name)
-            for socket_idname, socket_name in _property_data_output_specs(self):
-                self.outputs.new(socket_idname, socket_name)
-            _initialize_object_transform_property_input_defaults(self)
-            _apply_property_data_socket_visibility(self)
-            _hide_default_auxiliary_outputs(self)
-            _set_default_node_width(self, multiplier=(4.0 / 3.0))
+            _initialize_property_data_node(self)
 
         def draw_buttons(self, context, layout):
             del context
-            _persist_property_data_manual_hidden_keys(self)
-            _refresh_property_data_socket_visibility(self)
-            layout.prop(self, "output_mode", expand=True)
-            _draw_object_transform_property_assignment_fields(layout, self, "Property Fields")
+            _draw_property_data_node_buttons(self, layout, _draw_object_transform_property_assignment_fields)
 
         def update(self):
-            manual_hidden_keys = _resolve_property_data_manual_hidden_keys(self)
-            _sync_object_transform_property_data_sockets(self, manual_hidden_keys=manual_hidden_keys)
+            _update_property_data_node(self)
 
     return {
         "AFNodeModifierPropertyData": AFNodeModifierPropertyData,

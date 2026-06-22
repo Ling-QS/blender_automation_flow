@@ -55,6 +55,25 @@ class RuntimePropertyApplyMixin:
             ),
         )
 
+    def _property_package_apply_is_lenient(self, node):
+        return str(getattr(node, "bl_idname", "") or "") == "AFNodeApplyObjectProperties"
+
+    def _handle_property_package_missing_object(self, node, object_name):
+        if self._property_package_apply_is_lenient(node):
+            return False
+        if str(getattr(node, "missing_policy", "WARN_AND_SKIP") or "WARN_AND_SKIP") == "FAIL":
+            raise FlowExecutionError("AF_E008", f"Object '{object_name}' missing", node.name)
+        self.log("WARN", f"Object '{object_name}' missing, skipping", node.name)
+        return False
+
+    def _handle_property_package_missing_modifier(self, node, object_name, modifier_name):
+        if self._property_package_apply_is_lenient(node):
+            return False
+        if str(getattr(node, "missing_policy", "WARN_AND_SKIP") or "WARN_AND_SKIP") == "FAIL":
+            raise FlowExecutionError("AF_E008", f"Modifier '{modifier_name}' missing on '{object_name}'", node.name)
+        self.log("WARN", f"Modifier '{modifier_name}' missing on '{object_name}', skipping", node.name)
+        return False
+
     def _apply_property_assignment_entry_direct(self, node, property_assignment, obj, obj_item, source_node=None, source_socket=None, dry_run=False):
         property_assignment = _validate_property_assignment(
             property_assignment,
@@ -335,14 +354,16 @@ class RuntimePropertyApplyMixin:
         if definition_kind == PROPERTY_DEFINITION_KIND_OBJECT_DISPLAY:
             allowed_object_filter = self._property_apply_allowed_object_filter((object_list_payload or {}).get("items", []))
             applied_count = 0
+            matched_item_count = 0
+            missing_object_count = 0
             for item in package.get("items", []):
                 if not self._property_apply_item_matches_allowed_objects(item, allowed_object_filter):
                     continue
+                matched_item_count += 1
                 obj = self._find_object_by_item_cached({"id": item["object_id"], "name": item["object_name"]})
                 if obj is None:
-                    if node.missing_policy == "FAIL":
-                        raise FlowExecutionError("AF_E008", f"Object '{item['object_name']}' missing", node.name)
-                    self.log("WARN", f"Object '{item['object_name']}' missing, skipping", node.name)
+                    missing_object_count += 1
+                    self._handle_property_package_missing_object(node, str(item["object_name"]))
                     continue
                 props = dict(item.get("properties", {}))
                 changed = False
@@ -388,19 +409,24 @@ class RuntimePropertyApplyMixin:
                 "package_role": str(package.get("package_role", "")),
                 "scope_kind": str(package.get("scope_kind", "")),
                 "count": applied_count,
+                "matched_item_count": matched_item_count,
+                "missing_object_count": missing_object_count,
+                "missing_component_count": 0,
             }
 
         if definition_kind == PROPERTY_DEFINITION_KIND_OBJECT_TRANSFORM:
             allowed_object_filter = self._property_apply_allowed_object_filter((object_list_payload or {}).get("items", []))
             applied_count = 0
+            matched_item_count = 0
+            missing_object_count = 0
             for item in package.get("items", []):
                 if not self._property_apply_item_matches_allowed_objects(item, allowed_object_filter):
                     continue
+                matched_item_count += 1
                 obj = self._find_object_by_item_cached({"id": item["object_id"], "name": item["object_name"]})
                 if obj is None:
-                    if node.missing_policy == "FAIL":
-                        raise FlowExecutionError("AF_E008", f"Object '{item['object_name']}' missing", node.name)
-                    self.log("WARN", f"Object '{item['object_name']}' missing, skipping", node.name)
+                    missing_object_count += 1
+                    self._handle_property_package_missing_object(node, str(item["object_name"]))
                     continue
                 props = dict(item.get("properties", {}))
                 changed = False
@@ -430,25 +456,30 @@ class RuntimePropertyApplyMixin:
                 "package_role": str(package.get("package_role", "")),
                 "scope_kind": str(package.get("scope_kind", "")),
                 "count": applied_count,
+                "matched_item_count": matched_item_count,
+                "missing_object_count": missing_object_count,
+                "missing_component_count": 0,
             }
 
         allowed_object_filter = self._property_apply_allowed_object_filter((object_list_payload or {}).get("items", []))
         applied_count = 0
+        matched_item_count = 0
+        missing_object_count = 0
+        missing_component_count = 0
         for item in package.get("items", []):
             if not self._property_apply_item_matches_allowed_objects(item, allowed_object_filter):
                 continue
+            matched_item_count += 1
             obj = self._find_object_by_item_cached({"id": item["object_id"], "name": item["object_name"]})
             if obj is None:
-                if node.missing_policy == "FAIL":
-                    raise FlowExecutionError("AF_E008", f"Object '{item['object_name']}' missing", node.name)
-                self.log("WARN", f"Object '{item['object_name']}' missing, skipping", node.name)
+                missing_object_count += 1
+                self._handle_property_package_missing_object(node, str(item["object_name"]))
                 continue
             modifier_name = str(item.get("component_name", "") or "")
             modifier = obj.modifiers.get(modifier_name)
             if modifier is None:
-                if node.missing_policy == "FAIL":
-                    raise FlowExecutionError("AF_E008", f"Modifier '{modifier_name}' missing on '{obj.name}'", node.name)
-                self.log("WARN", f"Modifier '{modifier_name}' missing on '{obj.name}', skipping", node.name)
+                missing_component_count += 1
+                self._handle_property_package_missing_modifier(node, str(obj.name), modifier_name)
                 continue
             props = dict(item.get("properties", {}))
             changed = False
@@ -476,6 +507,9 @@ class RuntimePropertyApplyMixin:
             "package_role": str(package.get("package_role", "")),
             "scope_kind": str(package.get("scope_kind", "")),
             "count": applied_count,
+            "matched_item_count": matched_item_count,
+            "missing_object_count": missing_object_count,
+            "missing_component_count": missing_component_count,
         }
 
     def _apply_property_package(self, node, property_definition, property_package, object_list_payload, dry_run=False):
@@ -499,6 +533,9 @@ class RuntimePropertyApplyMixin:
         )
         definition_map = {_property_definition_signature(entry): entry for entry in definition_entries}
         total_count = 0
+        matched_item_count = 0
+        missing_object_count = 0
+        missing_component_count = 0
         package_roles = []
         scope_kinds = []
         for entry in package_entries:
@@ -508,6 +545,9 @@ class RuntimePropertyApplyMixin:
                 continue
             entry_report = self._apply_single_property_package(node, match, entry, object_list_payload, dry_run=dry_run)
             total_count += int(entry_report.get("count", 0))
+            matched_item_count += int(entry_report.get("matched_item_count", 0) or 0)
+            missing_object_count += int(entry_report.get("missing_object_count", 0) or 0)
+            missing_component_count += int(entry_report.get("missing_component_count", 0) or 0)
             package_roles.append(str(entry_report.get("package_role", "")))
             scope_kinds.append(str(entry_report.get("scope_kind", "")))
         return {
@@ -522,6 +562,9 @@ class RuntimePropertyApplyMixin:
                 else (scope_kinds[0] if scope_kinds else str(property_package.get("scope_kind", "")))
             ),
             "count": total_count,
+            "matched_item_count": matched_item_count,
+            "missing_object_count": missing_object_count,
+            "missing_component_count": missing_component_count,
             "no_properties": False,
         }
 

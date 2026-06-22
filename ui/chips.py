@@ -21,6 +21,7 @@ from .preferences import _ui_pref_enabled
 from .overlay_context import (
     _iter_visible_nodes,
     _node_editor_group_path,
+    _node_editor_group_path_labels,
     _node_editor_root_tree,
     _node_editor_zoom_factor,
     _ui_scale_factor,
@@ -740,27 +741,33 @@ def _draw_property_package_backdrop_tags(node_tree):
 
 
 def _draw_run_mode_chip(scene):
+    chip_spec = _run_mode_chip_spec(scene)
+    if chip_spec is None:
+        return None
+    return _draw_top_left_overlay_chip(
+        chip_spec["text"],
+        chip_spec["fill_color"],
+        chip_spec["outline_color"],
+        chip_spec["text_color"],
+    )
+
+
+def _run_mode_chip_spec(scene):
     if not _ui_pref_enabled("show_run_mode_chip", True):
-        return
+        return None
     if scene is None:
-        return
+        return None
     settings = getattr(scene, "af_flow_settings", None)
     if settings is None:
-        return
+        return None
     run_mode = str(getattr(settings, "run_mode", "NORMAL") or "NORMAL")
     runtime_status = str(getattr(settings, "runtime_status", "IDLE") or "IDLE")
     active_statuses = {"PRECHECK", "RUNNING", "WAITING", "RELOADING"}
     show_active_status = runtime_status in active_statuses
     show_mode_chip = run_mode in {"DRY_RUN", "FLOW_TEST"}
     if not show_active_status and not show_mode_chip:
-        return
+        return None
 
-    region = getattr(bpy.context, "region", None)
-    if region is None or getattr(region, "type", "") != "WINDOW":
-        return
-
-    ui_scale = _ui_scale_factor()
-    chip_scale = ui_scale
     status_label = af_iface(_runtime_status_label(runtime_status)) if show_active_status else ""
     if run_mode == "FLOW_TEST":
         chip_text = f"{af_iface('Flow Test')} - {status_label}" if show_active_status else af_iface("Flow Test")
@@ -793,8 +800,36 @@ def _draw_run_mode_chip(scene):
         outline_color = (0.42, 0.82, 0.54, 0.98)
         text_color = (0.94, 1.0, 0.95, 1.0)
 
-    blf.size(_STORE_CHIP_FONT_ID, max(1, int(round(12 * chip_scale))))
-    text_width, text_height = blf.dimensions(_STORE_CHIP_FONT_ID, chip_text)
+    return {
+        "text": chip_text,
+        "fill_color": fill_color,
+        "outline_color": outline_color,
+        "text_color": text_color,
+    }
+
+
+def _draw_top_left_overlay_chip(
+    chip_text,
+    fill_color,
+    outline_color,
+    text_color,
+    *,
+    top_y=None,
+    font_size=12.0,
+):
+    region = getattr(bpy.context, "region", None)
+    if region is None or getattr(region, "type", "") != "WINDOW":
+        return None
+
+    ui_scale = _ui_scale_factor()
+    chip_scale = ui_scale
+    chip_text = str(chip_text or "").strip()
+    if not chip_text:
+        return None
+    blf.size(_STORE_CHIP_FONT_ID, max(1, int(round(float(font_size) * chip_scale))))
+    max_text_width = max(64.0, float(region.width) - (24.0 * chip_scale))
+    clipped_text = _clip_text_to_width(_STORE_CHIP_FONT_ID, chip_text, max_text_width)
+    text_width, text_height = blf.dimensions(_STORE_CHIP_FONT_ID, clipped_text)
     pad_x = 11.0 * chip_scale
     pad_y = 5.0 * chip_scale
     chip_width = float(text_width) + (pad_x * 2.0)
@@ -802,7 +837,7 @@ def _draw_run_mode_chip(scene):
     margin_x = 12.0 * chip_scale
     margin_y = 12.0 * chip_scale
     chip_left = margin_x
-    chip_top = float(region.height) - margin_y
+    chip_top = float(top_y) if top_y is not None else float(region.height) - margin_y
     chip_bottom = chip_top - chip_height
 
     _draw_pixel_rounded_rect(
@@ -817,4 +852,22 @@ def _draw_run_mode_chip(scene):
     )
     blf.color(_STORE_CHIP_FONT_ID, *text_color)
     blf.position(_STORE_CHIP_FONT_ID, chip_left + pad_x, chip_bottom + pad_y + chip_scale, 0)
-    blf.draw(_STORE_CHIP_FONT_ID, chip_text)
+    blf.draw(_STORE_CHIP_FONT_ID, clipped_text)
+    return chip_bottom
+
+
+def _draw_group_path_chip(*, top_y=None):
+    labels = _node_editor_group_path_labels(bpy.context)
+    if not labels:
+        return None
+    chip_text = " / ".join(str(label or "").strip() for label in labels if str(label or "").strip())
+    if not chip_text:
+        return None
+    return _draw_top_left_overlay_chip(
+        chip_text,
+        (0.14, 0.18, 0.24, 0.90),
+        (0.42, 0.52, 0.66, 0.98),
+        (0.95, 0.97, 1.0, 1.0),
+        top_y=top_y,
+        font_size=11.0,
+    )

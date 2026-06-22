@@ -1,3 +1,5 @@
+import copy
+
 from ...node_system.socket_aliases import (
     ADD_PROPERTY_ASSIGNMENT_SOCKET_NAME,
     ADD_PROPERTY_PACKAGE_SOCKET_NAME,
@@ -8,17 +10,23 @@ from ...node_system.socket_aliases import (
 )
 from ...runtime_core.constants import (
     FlowExecutionError,
+    PROPERTY_DEFINITION_KIND_MODIFIER,
+    PROPERTY_DEFINITION_KIND_OBJECT_DISPLAY,
+    PROPERTY_DEFINITION_KIND_OBJECT_TRANSFORM,
+    PROPERTY_PACKAGE_ROLE_COMPOSITE,
     PROPERTY_PACKAGE_SCOPE_MODIFIER,
+    PROPERTY_PACKAGE_SCOPE_OBJECT,
 )
+from ...node_system.config import PROPERTY_DATA_FIELD_SPECS
 from ...runtime_property.definitions import (
     _clone_property_assignment,
-    _clone_property_definition,
     _iter_property_assignment_entries,
-    _iter_property_definition_entries,
+    _make_empty_property_definition,
     _merge_property_assignments,
     _matches_modifier_filters,
     _merge_property_definitions,
     _modifier_filter_settings_from_metadata,
+    _property_definition_matching_fields,
     _validate_property_assignment,
     _property_definition_has_content,
     _validate_property_definition,
@@ -26,7 +34,10 @@ from ...runtime_property.definitions import (
 from ...runtime_property.api import (
     _clone_property_package,
     _filter_property_package,
+    _iter_property_package_entries,
+    _make_composite_property_package,
     _merge_property_packages,
+    _normalize_filtered_leaf_property_package,
     _property_package_has_property_content,
     _property_package_item_count,
     _property_package_to_definition,
@@ -34,154 +45,800 @@ from ...runtime_property.api import (
     _validate_property_package,
 )
 from ...runtime_math.values import _identity_rotation_payload
+from ...runtime_refs.objects import _property_package_object_identity
+from ...runtime_scene.objects import _object_reference_identity
+
+
+_PROPERTY_DATA_CONTEXT_DEFINITION_BY_NODE_TYPE = {
+    "AFNodeModifierPropertyData": (PROPERTY_DEFINITION_KIND_MODIFIER, PROPERTY_PACKAGE_SCOPE_MODIFIER),
+    "AFNodeObjectDisplayPropertyData": (PROPERTY_DEFINITION_KIND_OBJECT_DISPLAY, PROPERTY_PACKAGE_SCOPE_OBJECT),
+    "AFNodeObjectTransformPropertyData": (PROPERTY_DEFINITION_KIND_OBJECT_TRANSFORM, PROPERTY_PACKAGE_SCOPE_OBJECT),
+}
+
+_PROPERTY_DATA_CONTEXT_FIELD_DEFAULTS = {
+    "display_type": "TEXTURED",
+    "location": (0.0, 0.0, 0.0),
+    "rotation_mode": "XYZ",
+    "scale": (1.0, 1.0, 1.0),
+}
 
 
 class RuntimePropertyPackageDataMixin:
-    def _evaluate_property_package_data_node(self, node, node_type):
+    def _make_empty_composite_property_package(self, source_node):
+        return _make_composite_property_package(
+            source_node,
+            [],
+            metadata={
+                "entry_count": 0,
+                "count": 0,
+                "object_count": 0,
+                "property_definition": _make_empty_property_definition(source_node),
+            },
+        )
+
+    def _property_data_context_field_specs(self, node):
+        node_type = str(getattr(node, "bl_idname", "") or "")
+        return tuple(
+            dict(spec or {})
+            for spec in PROPERTY_DATA_FIELD_SPECS.get(node_type, ())
+            if bool(dict(spec or {}).get("supports_context", False))
+        )
+
+    def _property_data_context_default_value(self, field_key):
+        field_key = str(field_key or "")
+        if field_key == "rotation":
+            return _identity_rotation_payload()
+        if field_key in _PROPERTY_DATA_CONTEXT_FIELD_DEFAULTS:
+            return copy.deepcopy(_PROPERTY_DATA_CONTEXT_FIELD_DEFAULTS[field_key])
+        return False if field_key.startswith("show_") or field_key.startswith("hide_") else 0.0
+
+    def _property_data_context_entry_matches_node_type(self, node_type, entry_definition):
+        expected = _PROPERTY_DATA_CONTEXT_DEFINITION_BY_NODE_TYPE.get(str(node_type or ""))
+        if expected is None:
+            return False
+        expected_kind, expected_scope = expected
+        return (
+            str(dict(entry_definition or {}).get("definition_kind", "") or "") == str(expected_kind)
+            and str(dict(entry_definition or {}).get("scope_kind", "") or "") == str(expected_scope)
+        )
+
+    def _property_package_item_matches_context_item(self, item, scope_kind, context_item, *, modifier_name=""):
+        if not isinstance(context_item, dict) or not context_item:
+            return False
+        context_identity, _context_object, _context_object_id, _context_object_name, _context_object_uuid = _object_reference_identity(
+            int(context_item.get("id", 0) or 0),
+            str(context_item.get("name", "") or ""),
+            str(context_item.get("uuid", "") or context_item.get("object_uuid", "") or ""),
+            object_resolver=self._find_object_by_item_cached,
+        )
+        item_identity, _item_object, _item_object_id, _item_object_name, _item_object_uuid = _property_package_object_identity(
+            dict(item or {}),
+            object_resolver=self._find_object_by_item_cached,
+            object_reference_identity=lambda object_id, object_name, object_uuid="", object_resolver=None: _object_reference_identity(
+                object_id,
+                object_name,
+                object_uuid=object_uuid,
+                object_resolver=object_resolver,
+            ),
+        )
+        if context_identity != item_identity:
+            return False
+        if str(scope_kind or "") != PROPERTY_PACKAGE_SCOPE_MODIFIER:
+            return True
+        return bool(modifier_name) and str(dict(item or {}).get("component_name", "") or "") == str(modifier_name or "")
+
+    def _property_data_context_report(self, *, context_source, has_context, matched_item, matched_field_count):
+        return {
+            "context_source": str(context_source or "LIVE"),
+            "has_context": bool(has_context),
+            "matched_item": bool(matched_item),
+            "matched_field_count": int(matched_field_count),
+        }
+
+    def _property_data_package_context_values(self, node, property_package, property_definition):
+        node_type = str(getattr(node, "bl_idname", "") or "")
+        context_field_specs = self._property_data_context_field_specs(node)
+        field_values = {
+            str(spec.get("key", "") or ""): self._property_data_context_default_value(spec.get("key", ""))
+            for spec in context_field_specs
+        }
+        context = self.current_property_context if isinstance(self.current_property_context, dict) else None
+        context_item = context.get("object_item") if isinstance(context, dict) else None
+        has_context = False
+        modifier_name = ""
         if node_type == "AFNodeModifierPropertyData":
-            property_definition = self._modifier_property_definition_from_node(node)
-            output_mode = str(getattr(node, "output_mode", "ASSIGNMENT") or "ASSIGNMENT")
-            if output_mode == "CONTEXT":
-                modifier = self._current_property_context_modifier()
-                settings = _modifier_filter_settings_from_metadata(property_definition.get("metadata", {}))
-                if modifier is not None and not _matches_modifier_filters(
-                    modifier,
-                    str(settings["modifier_type_filter"]),
-                    str(settings["modifier_name_filter"]),
-                    str(settings["modifier_name_match_mode"]),
+            modifier = self._current_property_context_modifier()
+            context_object = self._current_property_context_object()
+            settings = _modifier_filter_settings_from_metadata(dict(property_definition or {}).get("metadata", {}))
+            if modifier is not None and not _matches_modifier_filters(
+                modifier,
+                str(settings["modifier_type_filter"]),
+                str(settings["modifier_name_filter"]),
+                str(settings["modifier_name_match_mode"]),
+            ):
+                modifier = None
+            if modifier is not None and bool(getattr(node, "filter_by_context", False)) and not bool(
+                self._input_bool(node, "Context", True)
+            ):
+                modifier = None
+            has_context = bool(modifier is not None and context_object is not None and isinstance(context_item, dict))
+            if has_context:
+                modifier_name = str(getattr(modifier, "name", "") or "")
+        else:
+            has_context = bool(self._current_property_context_object() is not None and isinstance(context_item, dict))
+        report = self._property_data_context_report(
+            context_source="PACKAGE",
+            has_context=has_context,
+            matched_item=False,
+            matched_field_count=0,
+        )
+        if not has_context:
+            return field_values, "", report
+
+        package = _validate_property_package(property_package, node.name)
+        expected_scope = _PROPERTY_DATA_CONTEXT_DEFINITION_BY_NODE_TYPE[node_type][1]
+        matched_fields = set()
+        matched_component_name = ""
+        for entry in _iter_property_package_entries(package, node.name):
+            entry_definition = _property_package_to_definition(entry, node.name)
+            if not self._property_data_context_entry_matches_node_type(node_type, entry_definition):
+                continue
+            for item in list(entry.get("items", [])):
+                if not self._property_package_item_matches_context_item(
+                    item,
+                    expected_scope,
+                    context_item,
+                    modifier_name=modifier_name,
                 ):
-                    modifier = None
-                if modifier is not None and bool(settings["filter_by_context"]) and not bool(
-                    settings.get("context_filter_passed", True)
-                ):
-                    modifier = None
-                self._set_output_socket_value(
-                    node,
-                    "Name",
-                    str(getattr(modifier, "name", "") or "") if modifier is not None else "",
+                    continue
+                report["matched_item"] = True
+                if expected_scope == PROPERTY_PACKAGE_SCOPE_MODIFIER:
+                    matched_component_name = str(dict(item or {}).get("component_name", "") or "")
+                properties = dict(item.get("properties", {}) or {})
+                for spec in context_field_specs:
+                    field_key = str(spec.get("key", "") or "")
+                    if field_key not in properties:
+                        continue
+                    field_values[field_key] = copy.deepcopy(properties.get(field_key))
+                    matched_fields.add(field_key)
+        report["matched_field_count"] = len(matched_fields)
+        return field_values, matched_component_name, report
+
+    def _property_data_connected_package(self, node):
+        package_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)(PROPERTY_PACKAGE_SOCKET_NAME)
+        if package_socket is None or not bool(getattr(package_socket, "is_linked", False)):
+            return False, None
+        property_package = self._get_linked_output(node, PROPERTY_PACKAGE_SOCKET_NAME, "property_package")
+        if property_package is None:
+            property_package = self._make_empty_composite_property_package(node.name)
+        return True, property_package
+
+    def _refresh_property_package_current_values(self, node, property_package, object_list=None, property_definition=None):
+        package = _validate_property_package(property_package, node.name)
+        selection = self._refresh_property_package_selection_context(node, object_list, property_definition)
+        if not bool(selection["refresh_values"]) and not bool(selection["prune_items"]):
+            raise FlowExecutionError("AF_E020", "Enable Refresh Values or Prune Items", node.name)
+        stats = {
+            "refreshed_item_count": 0,
+            "removed_item_count": 0,
+            "removed_field_count": 0,
+            "missing_object_count": 0,
+            "missing_component_count": 0,
+            "selection_fallback": str(selection["selection_fallback"]),
+        }
+        refreshed_package = self._refresh_property_package_entry_current_values(node, package, selection, stats)
+        return refreshed_package, stats
+
+    def _refresh_property_package_selection_context(self, node, object_list=None, property_definition=None):
+        validated_definition = None
+        if property_definition is not None:
+            validated_definition = _validate_property_definition(property_definition, node.name)
+        definition_filter_active = validated_definition is not None and _property_definition_has_content(
+            validated_definition,
+            node.name,
+        )
+        object_items = list(dict(object_list or {}).get("items", []) or []) if isinstance(object_list, dict) else []
+        object_filter_active = object_list is not None
+        allowed_ids = set()
+        allowed_names = set()
+        for item in object_items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                allowed_ids.add(int(item.get("id", 0) or 0))
+            except Exception:
+                pass
+            object_name = str(item.get("name", "") or "").strip()
+            if object_name:
+                allowed_names.add(object_name)
+        selection_fallback = "FULL_PACKAGE" if not object_filter_active and not definition_filter_active else ""
+        return {
+            "range_mode": str(getattr(node, "range_mode", "IN_SCOPE") or "IN_SCOPE"),
+            "refresh_values": bool(getattr(node, "refresh_values", True)),
+            "prune_items": bool(getattr(node, "prune_items", False)),
+            "object_filter_active": bool(object_filter_active),
+            "allowed_ids": allowed_ids,
+            "allowed_names": allowed_names,
+            "definition_filter_active": bool(definition_filter_active),
+            "property_definition": validated_definition,
+            "selection_fallback": selection_fallback,
+        }
+
+    def _refresh_property_package_entry_current_values(self, node, package, selection, stats):
+        refreshed_package = _clone_property_package(package)
+        if str(refreshed_package.get("package_role", "") or "") == PROPERTY_PACKAGE_ROLE_COMPOSITE:
+            refreshed_entries = [
+                self._refresh_property_package_entry_current_values(node, entry, selection, stats)
+                for entry in list(refreshed_package.get("entries", []))
+            ]
+            refreshed_entries = [
+                entry
+                for entry in refreshed_entries
+                if isinstance(entry, dict) and _property_package_item_count(entry) > 0
+            ]
+            refreshed_package["entries"] = refreshed_entries
+            refreshed_package["metadata"] = self._refreshed_property_package_metadata(
+                node,
+                refreshed_package,
+                items=None,
+                entries=refreshed_entries,
+            )
+            return refreshed_package
+        return self._refresh_leaf_property_package(node, refreshed_package, selection, stats)
+
+    def _refreshed_property_package_metadata(self, node, package, *, items=None, entries=None):
+        metadata = copy.deepcopy(dict(package.get("metadata", {}) or {}))
+        if entries is not None:
+            metadata["entry_count"] = len(entries)
+            metadata["count"] = sum(_property_package_item_count(entry) for entry in entries)
+            metadata["object_count"] = len(self._property_package_object_ids(entries=entries))
+            metadata["property_definition"] = _property_package_to_definition(package, node.name)
+            return metadata
+        item_list = list(items or [])
+        metadata["entry_count"] = 0
+        metadata["count"] = len(item_list)
+        metadata["object_count"] = len(
+            {
+                int(item.get("object_id", 0) or 0)
+                for item in item_list
+                if isinstance(item, dict)
+            }
+        )
+        metadata["property_definition"] = (
+            _make_empty_property_definition(node.name)
+            if not item_list
+            else metadata.get("property_definition")
+        )
+        return metadata
+
+    def _property_package_object_ids(self, *, entries=None):
+        object_ids = set()
+        for entry in list(entries or []):
+            if str(entry.get("package_role", "") or "") == PROPERTY_PACKAGE_ROLE_COMPOSITE:
+                object_ids.update(self._property_package_object_ids(entries=list(entry.get("entries", []))))
+                continue
+            object_ids.update(
+                int(item.get("object_id", 0) or 0)
+                for item in list(entry.get("items", []))
+                if isinstance(item, dict)
+            )
+        return object_ids
+
+    def _refresh_leaf_property_package(self, node, package, selection, stats):
+        refreshed_package = _clone_property_package(package)
+        scope_kind = str(refreshed_package.get("scope_kind", "") or "")
+        package_definition = None
+        matching_definition_fields = set()
+        if bool(selection["definition_filter_active"]):
+            package_definition = _property_package_to_definition(refreshed_package, node.name)
+            matching_definition_fields = _property_definition_matching_fields(
+                package_definition,
+                selection["property_definition"],
+                node.name,
+            )
+        if scope_kind not in {PROPERTY_PACKAGE_SCOPE_OBJECT, PROPERTY_PACKAGE_SCOPE_MODIFIER}:
+            if self._leaf_package_has_selected_fields(refreshed_package, selection, matching_definition_fields):
+                self.log(
+                    "WARN",
+                    f"Refresh Property Package does not support scope '{scope_kind}', keeping previous values",
+                    node.name,
                 )
-                self._set_output_socket_value(
-                    node,
-                    "Show Viewport",
-                    bool(getattr(modifier, "show_viewport", False)) if modifier is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Show Render",
-                    bool(getattr(modifier, "show_render", False)) if modifier is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Show In Edit Mode",
-                    bool(getattr(modifier, "show_in_editmode", False)) if modifier is not None else False,
-                )
-            else:
-                property_assignment = self._modifier_property_assignment_from_node(node)
-                self._set_output(node, "property_assignment", property_assignment)
+            return refreshed_package
+
+        refreshed_items = []
+        for item in list(refreshed_package.get("items", [])):
+            next_item, keep_item = self._refresh_property_package_item_current_values(
+                node,
+                scope_kind,
+                item,
+                selection,
+                matching_definition_fields,
+                stats,
+            )
+            if keep_item:
+                refreshed_items.append(next_item)
+        refreshed_package["items"] = refreshed_items
+        refreshed_package["metadata"] = copy.deepcopy(dict(refreshed_package.get("metadata", {}) or {}))
+        refreshed_package["metadata"]["count"] = len(refreshed_items)
+        refreshed_package["metadata"]["object_count"] = len(
+            {
+                int(item.get("object_id", 0) or 0)
+                for item in refreshed_items
+                if isinstance(item, dict)
+            }
+        )
+        if not refreshed_items:
+            refreshed_package["metadata"]["property_definition"] = _make_empty_property_definition(node.name)
+            return refreshed_package
+        return _normalize_filtered_leaf_property_package(refreshed_package, node.name)
+
+    def _leaf_package_has_selected_fields(self, package, selection, matching_definition_fields):
+        for item in list(package.get("items", [])):
+            properties = dict(item.get("properties", {}) or {})
+            if not properties:
+                continue
+            matched_object = self._refresh_item_matches_object_selector(item, selection)
+            selected_fields = self._selected_refresh_fields(
+                properties,
+                matched_object,
+                matching_definition_fields,
+                selection,
+            )
+            if selected_fields:
+                return True
+        return False
+
+    def _refresh_item_matches_object_selector(self, item, selection):
+        if not bool(selection["object_filter_active"]):
+            return True
+        object_id = int(dict(item or {}).get("object_id", 0) or 0)
+        object_name = str(dict(item or {}).get("object_name", "") or "").strip()
+        return bool(
+            object_id in set(selection["allowed_ids"])
+            or (object_name and object_name in set(selection["allowed_names"]))
+        )
+
+    def _selected_refresh_fields(self, properties, matched_object, matching_definition_fields, selection):
+        property_keys = {str(key) for key in dict(properties or {}).keys()}
+        if not property_keys:
+            return set()
+        if str(selection["selection_fallback"] or "") == "FULL_PACKAGE":
+            return set(property_keys)
+
+        object_filter_active = bool(selection["object_filter_active"])
+        definition_filter_active = bool(selection["definition_filter_active"])
+        if object_filter_active and definition_filter_active:
+            in_scope_fields = set(property_keys).intersection(set(matching_definition_fields)) if matched_object else set()
+        elif object_filter_active:
+            in_scope_fields = set(property_keys) if matched_object else set()
+        elif definition_filter_active:
+            in_scope_fields = set(property_keys).intersection(set(matching_definition_fields))
+        else:
+            in_scope_fields = set(property_keys)
+
+        if str(selection["range_mode"] or "IN_SCOPE") == "OUT_OF_SCOPE":
+            return set(property_keys).difference(in_scope_fields)
+        return in_scope_fields
+
+    def _prune_selected_fields(self, properties, selected_fields):
+        removed_fields = {
+            str(key)
+            for key in set(selected_fields or set())
+            if str(key) in dict(properties or {})
+        }
+        next_properties = copy.deepcopy(dict(properties or {}))
+        for key in removed_fields:
+            next_properties.pop(key, None)
+        return next_properties, removed_fields
+
+    def _capture_object_scope_property_value(self, obj, key):
+        if key == "hide_viewport" and hasattr(obj, "hide_viewport"):
+            return True, bool(getattr(obj, "hide_viewport", False))
+        if key == "hide_render" and hasattr(obj, "hide_render"):
+            return True, bool(getattr(obj, "hide_render", False))
+        if key == "show_in_front" and hasattr(obj, "show_in_front"):
+            return True, bool(getattr(obj, "show_in_front", False))
+        if key == "show_name" and hasattr(obj, "show_name"):
+            return True, bool(getattr(obj, "show_name", False))
+        if key == "show_axis" and hasattr(obj, "show_axis"):
+            return True, bool(getattr(obj, "show_axis", False))
+        if key == "display_type" and hasattr(obj, "display_type"):
+            return True, str(getattr(obj, "display_type", "") or "")
+        if key == "location" and hasattr(obj, "location"):
+            return True, [float(value) for value in getattr(obj, "location", (0.0, 0.0, 0.0))]
+        if key == "rotation":
+            return True, self._capture_object_rotation_value(obj)
+        if key == "scale" and hasattr(obj, "scale"):
+            return True, [float(value) for value in getattr(obj, "scale", (1.0, 1.0, 1.0))]
+        if key == "rotation_mode" and hasattr(obj, "rotation_mode"):
+            return True, str(getattr(obj, "rotation_mode", "XYZ") or "XYZ")
+        return False, None
+
+    def _capture_modifier_scope_property_value(self, modifier, key):
+        if key == "show_viewport" and hasattr(modifier, "show_viewport"):
+            return True, bool(getattr(modifier, "show_viewport", False))
+        if key == "show_render" and hasattr(modifier, "show_render"):
+            return True, bool(getattr(modifier, "show_render", False))
+        if key == "show_in_editmode" and hasattr(modifier, "show_in_editmode"):
+            return True, bool(getattr(modifier, "show_in_editmode", False))
+        return False, None
+
+    def _refresh_property_package_item_current_values(self, node, scope_kind, item, selection, matching_definition_fields, stats):
+        refreshed_item = copy.deepcopy(dict(item or {}))
+        existing_properties = dict(refreshed_item.get("properties", {}) or {})
+        if not existing_properties:
+            return refreshed_item, True
+
+        matched_object = self._refresh_item_matches_object_selector(refreshed_item, selection)
+        selected_fields = self._selected_refresh_fields(
+            existing_properties,
+            matched_object,
+            matching_definition_fields,
+            selection,
+        )
+        if not selected_fields:
+            return refreshed_item, True
+
+        object_item = {
+            "id": int(refreshed_item.get("object_id", 0) or 0),
+            "name": str(refreshed_item.get("object_name", "") or ""),
+            "uuid": str(refreshed_item.get("object_uuid", "") or ""),
+        }
+        obj = self._find_object_by_item_cached(object_item)
+        if obj is None:
+            stats["missing_object_count"] += 1
+            if bool(selection["prune_items"]):
+                next_properties, removed_fields = self._prune_selected_fields(existing_properties, selected_fields)
+                stats["removed_field_count"] += len(removed_fields)
+                refreshed_item["properties"] = next_properties
+                if not next_properties:
+                    stats["removed_item_count"] += 1
+                    return refreshed_item, False
+            return refreshed_item, True
+
+        target_value_reader = self._capture_object_scope_property_value
+        target_ref = obj
+        if scope_kind == PROPERTY_PACKAGE_SCOPE_MODIFIER:
+            modifier_name = str(refreshed_item.get("component_name", "") or "")
+            modifier = getattr(obj, "modifiers", None).get(modifier_name) if getattr(obj, "modifiers", None) is not None else None
+            if modifier is None:
+                stats["missing_component_count"] += 1
+                if bool(selection["prune_items"]):
+                    next_properties, removed_fields = self._prune_selected_fields(existing_properties, selected_fields)
+                    stats["removed_field_count"] += len(removed_fields)
+                    refreshed_item["properties"] = next_properties
+                    if not next_properties:
+                        stats["removed_item_count"] += 1
+                        return refreshed_item, False
+                return refreshed_item, True
+            target_ref = modifier
+            target_value_reader = self._capture_modifier_scope_property_value
+
+        next_properties = copy.deepcopy(existing_properties)
+        if bool(selection["prune_items"]):
+            unsupported_fields = set()
+            for key in set(selected_fields):
+                supported, _value = target_value_reader(target_ref, str(key))
+                if not supported:
+                    unsupported_fields.add(str(key))
+            if unsupported_fields:
+                next_properties, removed_fields = self._prune_selected_fields(next_properties, unsupported_fields)
+                stats["removed_field_count"] += len(removed_fields)
+                if not next_properties:
+                    refreshed_item["properties"] = next_properties
+                    stats["removed_item_count"] += 1
+                    return refreshed_item, False
+
+        refreshed_key_count = 0
+        if bool(selection["refresh_values"]):
+            for key in sorted(set(selected_fields).intersection(set(next_properties.keys()))):
+                supported, value = target_value_reader(target_ref, str(key))
+                if not supported:
+                    continue
+                next_properties[str(key)] = value
+                refreshed_key_count += 1
+        refreshed_item["properties"] = next_properties
+        if refreshed_key_count > 0:
+            stats["refreshed_item_count"] += 1
+        return refreshed_item, True
+
+    def _refresh_object_scope_property_values(self, obj, properties):
+        refreshed_properties = copy.deepcopy(dict(properties or {}))
+        refreshed_key_count = 0
+        for key in list(refreshed_properties.keys()):
+            if key == "hide_viewport" and hasattr(obj, "hide_viewport"):
+                refreshed_properties[key] = bool(getattr(obj, "hide_viewport", False))
+                refreshed_key_count += 1
+            elif key == "hide_render" and hasattr(obj, "hide_render"):
+                refreshed_properties[key] = bool(getattr(obj, "hide_render", False))
+                refreshed_key_count += 1
+            elif key == "show_in_front" and hasattr(obj, "show_in_front"):
+                refreshed_properties[key] = bool(getattr(obj, "show_in_front", False))
+                refreshed_key_count += 1
+            elif key == "show_name" and hasattr(obj, "show_name"):
+                refreshed_properties[key] = bool(getattr(obj, "show_name", False))
+                refreshed_key_count += 1
+            elif key == "show_axis" and hasattr(obj, "show_axis"):
+                refreshed_properties[key] = bool(getattr(obj, "show_axis", False))
+                refreshed_key_count += 1
+            elif key == "display_type" and hasattr(obj, "display_type"):
+                refreshed_properties[key] = str(getattr(obj, "display_type", "") or "")
+                refreshed_key_count += 1
+            elif key == "location" and hasattr(obj, "location"):
+                refreshed_properties[key] = [float(value) for value in getattr(obj, "location", (0.0, 0.0, 0.0))]
+                refreshed_key_count += 1
+            elif key == "rotation":
+                refreshed_properties[key] = self._capture_object_rotation_value(obj)
+                refreshed_key_count += 1
+            elif key == "scale" and hasattr(obj, "scale"):
+                refreshed_properties[key] = [float(value) for value in getattr(obj, "scale", (1.0, 1.0, 1.0))]
+                refreshed_key_count += 1
+            elif key == "rotation_mode" and hasattr(obj, "rotation_mode"):
+                refreshed_properties[key] = str(getattr(obj, "rotation_mode", "XYZ") or "XYZ")
+                refreshed_key_count += 1
+        return refreshed_properties, refreshed_key_count
+
+    def _refresh_modifier_scope_property_values(self, modifier, properties):
+        refreshed_properties = copy.deepcopy(dict(properties or {}))
+        refreshed_key_count = 0
+        for key in list(refreshed_properties.keys()):
+            if key == "show_viewport" and hasattr(modifier, "show_viewport"):
+                refreshed_properties[key] = bool(getattr(modifier, "show_viewport", False))
+                refreshed_key_count += 1
+            elif key == "show_render" and hasattr(modifier, "show_render"):
+                refreshed_properties[key] = bool(getattr(modifier, "show_render", False))
+                refreshed_key_count += 1
+            elif key == "show_in_editmode" and hasattr(modifier, "show_in_editmode"):
+                refreshed_properties[key] = bool(getattr(modifier, "show_in_editmode", False))
+                refreshed_key_count += 1
+        return refreshed_properties, refreshed_key_count
+
+    def _evaluate_property_package_data_node(self, node, node_type):
+        if node_type == "AFNodeReadPropertyPackage":
+            target_store_node = self._resolve_read_property_package_target(node)
+            stored_package = self._read_stored_property_package_slot(target_store_node)
+            has_stored_package = stored_package is not None
+            property_package = (
+                _clone_property_package(stored_package)
+                if has_stored_package
+                else self._make_empty_composite_property_package(node.name)
+            )
+            item_count = int(_property_package_item_count(property_package))
+            entry_count = int(dict(property_package.get("metadata", {}) or {}).get("entry_count", 0) or 0)
+            empty = bool(item_count <= 0 and entry_count <= 0)
+            self._set_output(node, "property_package", property_package)
             self._set_output(
                 node,
                 "report",
                 {
-                    "definition_kind": str(property_definition["definition_kind"]),
-                    "output_mode": output_mode,
-                    "field_count": int(property_definition.get("metadata", {}).get("count", 0)),
+                    "package_role": str(property_package.get("package_role", "") or ""),
+                    "scope_kind": str(property_package.get("scope_kind", "") or ""),
+                    "entry_count": entry_count,
+                    "item_count": item_count,
+                    "has_stored_package": bool(has_stored_package),
+                    "empty": empty,
+                    "target_store_node_name": str(getattr(target_store_node, "name", "") or ""),
                 },
             )
+            return True
+
+        if node_type == "AFNodeModifierPropertyData":
+            property_definition = self._modifier_property_definition_from_node(node)
+            output_mode = str(getattr(node, "output_mode", "ASSIGNMENT") or "ASSIGNMENT")
+            report = {
+                "definition_kind": str(property_definition["definition_kind"]),
+                "output_mode": output_mode,
+                "field_count": int(property_definition.get("metadata", {}).get("count", 0)),
+            }
+            if output_mode == "CONTEXT":
+                package_connected, property_package = self._property_data_connected_package(node)
+                if package_connected:
+                    field_values, component_name, context_report = self._property_data_package_context_values(
+                        node,
+                        property_package,
+                        property_definition,
+                    )
+                    self._set_output_socket_value(node, "Name", str(component_name or ""))
+                    self._set_output_socket_value(node, "Show Viewport", bool(field_values.get("show_viewport", False)))
+                    self._set_output_socket_value(node, "Show Render", bool(field_values.get("show_render", False)))
+                    self._set_output_socket_value(node, "Show In Edit Mode", bool(field_values.get("show_in_editmode", False)))
+                else:
+                    modifier = self._current_property_context_modifier()
+                    settings = _modifier_filter_settings_from_metadata(property_definition.get("metadata", {}))
+                    if modifier is not None and not _matches_modifier_filters(
+                        modifier,
+                        str(settings["modifier_type_filter"]),
+                        str(settings["modifier_name_filter"]),
+                        str(settings["modifier_name_match_mode"]),
+                    ):
+                        modifier = None
+                    if modifier is not None and bool(getattr(node, "filter_by_context", False)) and not bool(
+                        self._input_bool(node, "Context", True)
+                    ):
+                        modifier = None
+                    has_context = bool(modifier is not None)
+                    context_report = self._property_data_context_report(
+                        context_source="LIVE",
+                        has_context=has_context,
+                        matched_item=has_context,
+                        matched_field_count=len(self._property_data_context_field_specs(node)) if has_context else 0,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Name",
+                        str(getattr(modifier, "name", "") or "") if modifier is not None else "",
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Show Viewport",
+                        bool(getattr(modifier, "show_viewport", False)) if modifier is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Show Render",
+                        bool(getattr(modifier, "show_render", False)) if modifier is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Show In Edit Mode",
+                        bool(getattr(modifier, "show_in_editmode", False)) if modifier is not None else False,
+                    )
+                report.update(context_report)
+            else:
+                property_assignment = self._modifier_property_assignment_from_node(node)
+                self._set_output(node, "property_assignment", property_assignment)
+            self._set_output(node, "report", report)
             return True
 
         if node_type == "AFNodeObjectDisplayPropertyData":
             property_definition = self._object_display_property_definition_from_node(node)
             output_mode = str(getattr(node, "output_mode", "ASSIGNMENT") or "ASSIGNMENT")
+            report = {
+                "definition_kind": str(property_definition["definition_kind"]),
+                "output_mode": output_mode,
+                "field_count": int(property_definition.get("metadata", {}).get("count", 0)),
+            }
             if output_mode == "CONTEXT":
-                context_object = self._current_property_context_object()
-                self._set_output_socket_value(
-                    node,
-                    "Hide Viewport",
-                    bool(getattr(context_object, "hide_viewport", False)) if context_object is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Hide Render",
-                    bool(getattr(context_object, "hide_render", False)) if context_object is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Show In Front",
-                    bool(getattr(context_object, "show_in_front", False)) if context_object is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Show Name",
-                    bool(getattr(context_object, "show_name", False)) if context_object is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Show Axis",
-                    bool(getattr(context_object, "show_axis", False)) if context_object is not None else False,
-                )
-                self._set_output_socket_value(
-                    node,
-                    "Display Type",
-                    str(getattr(context_object, "display_type", "TEXTURED") or "TEXTURED")
-                    if context_object is not None
-                    else "TEXTURED",
-                )
+                package_connected, property_package = self._property_data_connected_package(node)
+                if package_connected:
+                    field_values, _component_name, context_report = self._property_data_package_context_values(
+                        node,
+                        property_package,
+                        property_definition,
+                    )
+                    self._set_output_socket_value(node, "Hide Viewport", bool(field_values.get("hide_viewport", False)))
+                    self._set_output_socket_value(node, "Hide Render", bool(field_values.get("hide_render", False)))
+                    self._set_output_socket_value(node, "Show In Front", bool(field_values.get("show_in_front", False)))
+                    self._set_output_socket_value(node, "Show Name", bool(field_values.get("show_name", False)))
+                    self._set_output_socket_value(node, "Show Axis", bool(field_values.get("show_axis", False)))
+                    self._set_output_socket_value(
+                        node,
+                        "Display Type",
+                        str(field_values.get("display_type", "TEXTURED") or "TEXTURED"),
+                    )
+                else:
+                    context_object = self._current_property_context_object()
+                    has_context = bool(context_object is not None)
+                    context_report = self._property_data_context_report(
+                        context_source="LIVE",
+                        has_context=has_context,
+                        matched_item=has_context,
+                        matched_field_count=len(self._property_data_context_field_specs(node)) if has_context else 0,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Hide Viewport",
+                        bool(getattr(context_object, "hide_viewport", False)) if context_object is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Hide Render",
+                        bool(getattr(context_object, "hide_render", False)) if context_object is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Show In Front",
+                        bool(getattr(context_object, "show_in_front", False)) if context_object is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Show Name",
+                        bool(getattr(context_object, "show_name", False)) if context_object is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Show Axis",
+                        bool(getattr(context_object, "show_axis", False)) if context_object is not None else False,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Display Type",
+                        str(getattr(context_object, "display_type", "TEXTURED") or "TEXTURED")
+                        if context_object is not None
+                        else "TEXTURED",
+                    )
+                report.update(context_report)
             else:
                 property_assignment = self._object_display_property_assignment_from_node(node)
                 self._set_output(node, "property_assignment", property_assignment)
-            self._set_output(
-                node,
-                "report",
-                {
-                    "definition_kind": str(property_definition["definition_kind"]),
-                    "output_mode": output_mode,
-                    "field_count": int(property_definition.get("metadata", {}).get("count", 0)),
-                },
-            )
+            self._set_output(node, "report", report)
             return True
 
         if node_type == "AFNodeObjectTransformPropertyData":
             property_definition = self._object_transform_property_definition_from_node(node)
             output_mode = str(getattr(node, "output_mode", "ASSIGNMENT") or "ASSIGNMENT")
+            report = {
+                "definition_kind": str(property_definition["definition_kind"]),
+                "output_mode": output_mode,
+                "field_count": int(property_definition.get("metadata", {}).get("count", 0)),
+            }
             if output_mode == "CONTEXT":
-                context_object = self._current_property_context_object()
-                location_value = (
-                    tuple(float(component) for component in getattr(context_object, "location", (0.0, 0.0, 0.0)))
-                    if context_object is not None
-                    else (0.0, 0.0, 0.0)
-                )
-                self._set_output_socket_value(node, "Location", location_value)
-                rotation_value = (
-                    self._capture_object_rotation_value(context_object)
-                    if context_object is not None
-                    else _identity_rotation_payload()
-                )
-                self._set_output_socket_value(node, "Rotation", rotation_value)
-                scale_value = (
-                    tuple(float(component) for component in getattr(context_object, "scale", (1.0, 1.0, 1.0)))
-                    if context_object is not None
-                    else (1.0, 1.0, 1.0)
-                )
-                self._set_output_socket_value(node, "Scale", scale_value)
-                self._set_output_socket_value(
-                    node,
-                    "Rotation Mode",
-                    str(getattr(context_object, "rotation_mode", "XYZ") or "XYZ")
-                    if context_object is not None
-                    else "XYZ",
-                )
+                package_connected, property_package = self._property_data_connected_package(node)
+                if package_connected:
+                    field_values, _component_name, context_report = self._property_data_package_context_values(
+                        node,
+                        property_package,
+                        property_definition,
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Location",
+                        tuple(float(component) for component in field_values.get("location", (0.0, 0.0, 0.0))),
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Rotation",
+                        copy.deepcopy(field_values.get("rotation", _identity_rotation_payload())),
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Scale",
+                        tuple(float(component) for component in field_values.get("scale", (1.0, 1.0, 1.0))),
+                    )
+                    self._set_output_socket_value(
+                        node,
+                        "Rotation Mode",
+                        str(field_values.get("rotation_mode", "XYZ") or "XYZ"),
+                    )
+                else:
+                    context_object = self._current_property_context_object()
+                    has_context = bool(context_object is not None)
+                    context_report = self._property_data_context_report(
+                        context_source="LIVE",
+                        has_context=has_context,
+                        matched_item=has_context,
+                        matched_field_count=len(self._property_data_context_field_specs(node)) if has_context else 0,
+                    )
+                    location_value = (
+                        tuple(float(component) for component in getattr(context_object, "location", (0.0, 0.0, 0.0)))
+                        if context_object is not None
+                        else (0.0, 0.0, 0.0)
+                    )
+                    self._set_output_socket_value(node, "Location", location_value)
+                    rotation_value = (
+                        self._capture_object_rotation_value(context_object)
+                        if context_object is not None
+                        else _identity_rotation_payload()
+                    )
+                    self._set_output_socket_value(node, "Rotation", rotation_value)
+                    scale_value = (
+                        tuple(float(component) for component in getattr(context_object, "scale", (1.0, 1.0, 1.0)))
+                        if context_object is not None
+                        else (1.0, 1.0, 1.0)
+                    )
+                    self._set_output_socket_value(node, "Scale", scale_value)
+                    self._set_output_socket_value(
+                        node,
+                        "Rotation Mode",
+                        str(getattr(context_object, "rotation_mode", "XYZ") or "XYZ")
+                        if context_object is not None
+                        else "XYZ",
+                    )
+                report.update(context_report)
             else:
                 property_assignment = self._object_transform_property_assignment_from_node(node)
                 self._set_output(node, "property_assignment", property_assignment)
-            self._set_output(
-                node,
-                "report",
-                {
-                    "definition_kind": str(property_definition["definition_kind"]),
-                    "output_mode": output_mode,
-                    "field_count": int(property_definition.get("metadata", {}).get("count", 0)),
-                },
-            )
+            self._set_output(node, "report", report)
             return True
 
         if node_type == "AFNodePropertyContext":
@@ -321,6 +978,40 @@ class RuntimePropertyPackageDataMixin:
             )
             return True
 
+        if node_type == "AFNodeRefreshPropertyPackage":
+            package = self._get_linked_output(node, PROPERTY_PACKAGE_SOCKET_NAME, "property_package")
+            if package is None:
+                raise FlowExecutionError("AF_E011", "Property Package input is not linked", node.name)
+            object_list = self._get_linked_output(node, "Object List", "object_list")
+            property_definition = self._get_linked_output(node, PROPERTY_DEFINITION_SOCKET_NAME, "property_definition")
+            refreshed_package, stats = self._refresh_property_package_current_values(
+                node,
+                package,
+                object_list=object_list,
+                property_definition=property_definition,
+            )
+            self._set_output(node, "property_package", refreshed_package)
+            self._set_output(
+                node,
+                "report",
+                {
+                    "package_role": str(refreshed_package.get("package_role", "") or ""),
+                    "scope_kind": str(refreshed_package.get("scope_kind", "") or ""),
+                    "entry_count": int(dict(refreshed_package.get("metadata", {}) or {}).get("entry_count", 0) or 0),
+                    "item_count": int(_property_package_item_count(refreshed_package)),
+                    "range_mode": str(getattr(node, "range_mode", "IN_SCOPE") or "IN_SCOPE"),
+                    "selection_fallback": str(stats["selection_fallback"]),
+                    "refresh_values_enabled": bool(getattr(node, "refresh_values", True)),
+                    "prune_items_enabled": bool(getattr(node, "prune_items", False)),
+                    "refreshed_item_count": int(stats["refreshed_item_count"]),
+                    "removed_item_count": int(stats["removed_item_count"]),
+                    "removed_field_count": int(stats["removed_field_count"]),
+                    "missing_object_count": int(stats["missing_object_count"]),
+                    "missing_component_count": int(stats["missing_component_count"]),
+                },
+            )
+            return True
+
         if node_type == "AFNodeParsePropertyPackage":
             package = self._get_linked_output(node, PROPERTY_PACKAGE_SOCKET_NAME, "property_package")
             if package is None:
@@ -366,7 +1057,6 @@ class RuntimePropertyPackageDataMixin:
                 "input_entry_count": int(dict(package.get("metadata", {}) or {}).get("entry_count", 0) or 0),
                 "object_match_count": 0,
                 "definition_match_count": 0,
-                "removed_missing_modifier_count": 0,
             }
             object_filter_active = object_list is not None
             object_names = (
@@ -385,7 +1075,6 @@ class RuntimePropertyPackageDataMixin:
                 property_definition=property_definition,
                 object_filter_active=object_filter_active,
                 object_names=object_names,
-                remove_missing_modifiers=bool(getattr(node, "remove_missing_modifiers", False)),
                 object_resolver=self._find_object_by_item_cached,
                 node_name=node.name,
                 stats=stats,
@@ -407,7 +1096,6 @@ class RuntimePropertyPackageDataMixin:
                     "definition_filter_active": bool(definition_filter_active),
                     "object_match_count": int(stats["object_match_count"]),
                     "definition_match_count": int(stats["definition_match_count"]),
-                    "removed_missing_modifier_count": int(stats["removed_missing_modifier_count"]),
                     "filter_mode": str(getattr(node, "filter_mode", "KEEP_MATCHED") or "KEEP_MATCHED"),
                 },
             )

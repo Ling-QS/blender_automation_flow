@@ -429,7 +429,9 @@ def _custom_math_header_palette(node):
         "AFNodeSetGeometryAttribute",
         "AFNodePublishGeometryAttribute",
         "AFNodeCreatePropertyPackage",
+        "AFNodeRefreshPropertyPackage",
         "AFNodeStorePropertyPackage",
+        "AFNodeReadPropertyPackage",
         "AFNodeApplyObjectProperties",
         "AFNodeApplyPropertyPackage",
         "AFNodeRecordPropertyPackage",
@@ -2008,7 +2010,9 @@ def _custom_header_node_types():
         "AFNodeSetGeometryAttribute",
         "AFNodePublishGeometryAttribute",
         "AFNodeCreatePropertyPackage",
+        "AFNodeRefreshPropertyPackage",
         "AFNodeStorePropertyPackage",
+        "AFNodeReadPropertyPackage",
         "AFNodeApplyObjectProperties",
         "AFNodeApplyPropertyPackage",
         "AFNodeRecordPropertyPackage",
@@ -2166,10 +2170,11 @@ def _draw_status_overlay():
                 _draw_custom_math_header(node_tree)
             if _ui_pref_enabled("show_custom_flow_sockets", True):
                 _draw_flow_socket_endpoint_markers(node_tree)
-            if _ui_pref_enabled("show_run_mode_chip", True):
-                from .chips import _draw_run_mode_chip
+            from .chips import _draw_group_path_chip, _draw_run_mode_chip
 
-                _draw_run_mode_chip(getattr(bpy.context, "scene", None))
+            run_chip_bottom = _draw_run_mode_chip(getattr(bpy.context, "scene", None))
+            group_chip_top = (float(run_chip_bottom) - (8.0 * _ui_scale_factor())) if run_chip_bottom is not None else None
+            _draw_group_path_chip(top_y=group_chip_top)
     except Exception:
         return
 

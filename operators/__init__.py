@@ -6,6 +6,7 @@ from . import (
     dynamic_inputs,
     flow_reload,
     flow_run,
+    group_assets,
     group_interface,
     group_navigation,
     misc_ops,
