@@ -1,7 +1,8 @@
 import copy
 
-from ...runtime_core.constants import FLOW_OK, FLOW_WAIT, TASK_PLAN_KIND, FlowExecutionError
+from ...runtime_core.constants import FLOW_OK, FLOW_WAIT, FlowExecutionError
 from ...runtime_flow.helpers import _find_single_from_input_socket
+from ...runtime_task_ref.refs import _invalid_task_ref_issue
 
 
 class RuntimeTaskActionNodesMixin:
@@ -37,7 +38,7 @@ class RuntimeTaskActionNodesMixin:
             return FLOW_OK, handle["task_id"]
 
         task_plan = self._get_linked_output(node, "Task Plan", "task_plan")
-        if task_plan is None or str(task_plan.get("plan_kind", "")) != TASK_PLAN_KIND:
+        if not self._is_valid_reference_payload("task_plan", task_plan):
             raise FlowExecutionError("AF_E011", "Task Plan input is not linked to a valid Task Plan", node.name)
         handle = self._start_background_task_plan(node, task_plan)
         if self._task_handle_is_skipped(handle):
@@ -64,8 +65,15 @@ class RuntimeTaskActionNodesMixin:
 
     def _execute_task_step_node(self, node):
         task_ref = self._get_linked_output(node, "Task Ref", "task_ref")
-        if task_ref is None:
-            raise FlowExecutionError("AF_E011", "Task Ref not found", node.name)
+        if not self._is_valid_reference_payload("task_ref", task_ref):
+            invalid_issue = _invalid_task_ref_issue(task_ref) if isinstance(task_ref, dict) else None
+            if invalid_issue is None:
+                raise FlowExecutionError("AF_E011", "Task Ref not found", node.name)
+            raise FlowExecutionError(
+                str(invalid_issue.get("code", "AF_E011") or "AF_E011"),
+                str(invalid_issue.get("message", "Task Ref is invalid") or "Task Ref is invalid"),
+                str(invalid_issue.get("node_name", "") or node.name),
+            )
         object_list = self._object_list_from_task_ref(task_ref, "NAME_ASC", self.scene)
         wait_result = self._poll_bake_wait(node)
         if wait_result is not None:

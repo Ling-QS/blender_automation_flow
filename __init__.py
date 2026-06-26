@@ -36,20 +36,35 @@ MODULES = (
 )
 
 
+def _reset_runtime_caches():
+    try:
+        from .runtime_flow.helpers import reset_runtime_flow_caches
+    except Exception:
+        return
+    try:
+        reset_runtime_flow_caches()
+    except Exception:
+        pass
+
+
 def register():
+    _reset_runtime_caches()
     tree.suspend_runtime_sync()
     try:
         for module in MODULES:
             module.register()
     finally:
         tree.resume_runtime_sync()
+    _reset_runtime_caches()
     tree.queue_post_register_sync()
 
 
 def unregister():
+    _reset_runtime_caches()
     tree.suspend_runtime_sync()
     try:
         for module in reversed(MODULES):
             module.unregister()
     finally:
         tree.resume_runtime_sync()
+    _reset_runtime_caches()

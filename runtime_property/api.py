@@ -467,7 +467,7 @@ def _filter_property_package(
             filtered_leaf["metadata"]["property_definition"] = _make_empty_property_definition(
                 node_name or str(package.get("source_node", "") or "Filter")
             )
-        return _property_package_keep_objects_only(filtered_leaf, object_resolver=object_resolver)
+        return filtered_leaf
     if not object_filter_active and not definition_filter_active and not keep:
         result = _clone_property_package(package)
         result["metadata"] = copy.deepcopy(result.get("metadata", {}))

@@ -101,10 +101,10 @@ class RuntimeTaskRefsMixin(
             if from_node is None:
                 continue
             linked_count += 1
-            package = self._get_output(from_node, "property_package")
+            package = self._get_output(from_node, "property_package", normalize=False)
             if package is None and from_node.bl_idname in self.DATA_NODE_TYPES:
                 self._evaluate_data_node(from_node)
-                package = self._get_output(from_node, "property_package")
+                package = self._get_output(from_node, "property_package", normalize=False)
             if package is None:
                 raise FlowExecutionError(
                     "AF_E011",

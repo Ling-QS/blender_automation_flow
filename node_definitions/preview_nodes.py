@@ -11,6 +11,7 @@ def build_preview_node_classes(
     *,
     AFBaseNode,
     OBJECT_DISPLAY_TYPE_ITEMS,
+    OBJECT_INTERACTION_MODE_ITEMS,
     OBJECT_ROTATION_MODE_ITEMS,
     PREVIEW_DATA_MODE_BY_SOCKET_IDNAME,
     PREVIEW_DATA_MODE_ITEMS,
@@ -19,6 +20,7 @@ def build_preview_node_classes(
     PREVIEW_PROPERTY_DEFINITION_VIEW_MODE_ITEMS,
     PREVIEW_PROPERTY_PACKAGE_VIEW_MODE_ITEMS,
     PREVIEW_TASK_PLAN_VIEW_MODE_ITEMS,
+    VIEWPORT_SHADING_MODE_ITEMS,
     _enum_identifier_label,
     _find_single_from_input_socket,
     _hide_default_auxiliary_outputs,
@@ -30,9 +32,9 @@ def build_preview_node_classes(
     _property_definition_has_content,
     _property_role_label,
     _property_scope_label,
-    _rebuild_sockets,
     _set_default_node_width,
     _summarize_property_package,
+    _sync_node_sockets_in_place,
     _ui_runner_for_node,
 ):
     def _preview_mode_spec(mode):
@@ -79,6 +81,7 @@ def build_preview_node_classes(
     def _sync_preview_data_sockets(node):
         node_tree = getattr(node, "id_data", None)
         upstream_socket = None
+        did_rebuild = False
         input_socket = _preview_input_socket(node)
         current_mode = str(getattr(node, "preview_mode", "OBJECT_LIST") or "OBJECT_LIST")
         current_is_virtual = bool(getattr(input_socket, "af_is_virtual", False)) if input_socket is not None else True
@@ -94,14 +97,19 @@ def build_preview_node_classes(
             effective_mode = current_mode
 
         target_name = _preview_mode_spec(effective_mode)[1] if effective_mode else PREVIEW_DATA_VIRTUAL_LABEL
-        needs_rebuild = (
+        needs_repair = (
             len(node.inputs) != 1
             or str(getattr(node.inputs[0], "bl_idname", "") or "") != "AFSocketPreviewData"
-            or str(getattr(node.inputs[0], "name", "") or "") != target_name
             or len(node.outputs) != 0
         )
-        if needs_rebuild:
-            _rebuild_sockets(node, (("AFSocketPreviewData", target_name),), ())
+        if needs_repair:
+            _sync_node_sockets_in_place(node, (("AFSocketPreviewData", target_name),), ())
+            did_rebuild = True
+        elif str(getattr(node.inputs[0], "name", "") or "") != target_name:
+            try:
+                node.inputs[0].name = target_name
+            except Exception:
+                pass
 
         input_socket = _preview_input_socket(node)
         if input_socket is None:
@@ -109,7 +117,7 @@ def build_preview_node_classes(
         input_socket.af_is_virtual = effective_mode is None
         if str(getattr(input_socket, "name", "") or "") != target_name:
             input_socket.name = target_name
-        if upstream_socket is not None and not bool(getattr(input_socket, "is_linked", False)) and node_tree is not None:
+        if did_rebuild and upstream_socket is not None and not bool(getattr(input_socket, "is_linked", False)) and node_tree is not None:
             try:
                 node_tree.links.new(upstream_socket, input_socket)
             except Exception:
@@ -199,6 +207,166 @@ def build_preview_node_classes(
         except Exception:
             return None
 
+    def _preview_seed_property_context_from_object_list(runner, object_list):
+        if runner is None or not isinstance(object_list, dict):
+            return False
+        object_items = [dict(item or {}) for item in list(object_list.get("items", [])) if isinstance(item, dict) and item]
+        if not object_items:
+            return False
+        object_count = len(object_items)
+        for index, obj_item in enumerate(object_items):
+            try:
+                obj = runner._find_object_by_item_cached(obj_item)
+            except Exception:
+                obj = None
+            if obj is None:
+                continue
+            try:
+                runner.current_property_context = runner._make_object_property_context(
+                    obj_item,
+                    obj,
+                    index,
+                    object_count,
+                    object_items,
+                    copy_payload=False,
+                )
+                return True
+            except Exception:
+                continue
+        return False
+
+    def _preview_object_list_from_downstream_context(runner, producer_node, group_path=None, visited=None, depth=0):
+        if runner is None or producer_node is None or depth > 8:
+            return None
+        node_tree = getattr(producer_node, "id_data", None)
+        if node_tree is None:
+            return None
+
+        if visited is None:
+            visited = set()
+        visit_key = (
+            getattr(node_tree, "name", ""),
+            str(getattr(producer_node, "name", "") or ""),
+            tuple(
+                (
+                    str(item.get("tree_name", "") or ""),
+                    str(item.get("node_name", "") or ""),
+                )
+                for item in list(group_path or [])
+                if isinstance(item, dict)
+            ),
+        )
+        if visit_key in visited:
+            return None
+        visited.add(visit_key)
+
+        for link in getattr(node_tree, "links", []):
+            try:
+                if not bool(getattr(link, "is_valid", True)):
+                    continue
+                if getattr(link, "from_node", None) != producer_node:
+                    continue
+            except Exception:
+                continue
+
+            consumer_node = getattr(link, "to_node", None)
+            if consumer_node is None:
+                continue
+
+            object_list_socket = find_node_input_socket(consumer_node, "Object List")
+            if object_list_socket is not None:
+                upstream_node, upstream_socket = _find_single_from_input_socket(object_list_socket)
+                if upstream_node is not None and upstream_socket is not None:
+                    try:
+                        object_list = runner._get_output_from_source(
+                            upstream_node,
+                            upstream_socket,
+                            "object_list",
+                            list(group_path or []),
+                        )
+                    except Exception:
+                        object_list = None
+                    if isinstance(object_list, dict) and list(object_list.get("items", [])):
+                        return object_list
+
+            object_list = _preview_object_list_from_downstream_context(
+                runner,
+                consumer_node,
+                group_path=group_path,
+                visited=visited,
+                depth=depth + 1,
+            )
+            if isinstance(object_list, dict) and list(object_list.get("items", [])):
+                return object_list
+        return None
+
+    def _seed_preview_property_context(runner, source_node, source_socket, group_path=None):
+        if runner is None or source_node is None:
+            return False
+        existing_context = getattr(runner, "current_property_context", None)
+        if isinstance(existing_context, dict) and existing_context:
+            return True
+
+        previous_group_path = list(getattr(runner, "current_group_path", []))
+        depends_on_context = False
+        try:
+            runner.current_group_path = list(group_path or [])
+            source_depends_fn = getattr(runner, "_source_depends_on_property_context", None)
+            node_depends_fn = getattr(runner, "_data_node_depends_on_property_context", None)
+            if callable(source_depends_fn) and source_socket is not None:
+                depends_on_context = bool(source_depends_fn(source_node, source_socket, set()))
+            elif callable(node_depends_fn):
+                depends_on_context = bool(node_depends_fn(source_node))
+        except Exception:
+            depends_on_context = False
+        finally:
+            runner.current_group_path = previous_group_path
+
+        if not depends_on_context:
+            return False
+
+        candidate_specs = [(source_node, list(group_path or []))]
+        resolve_step_ref = getattr(runner, "_resolve_step_ref", None)
+        if callable(resolve_step_ref):
+            group_path_items = list(group_path or [])
+            for index in range(len(group_path_items) - 1, -1, -1):
+                step_ref = group_path_items[index]
+                try:
+                    candidate_node = resolve_step_ref(step_ref, str(getattr(source_node, "name", "") or "Preview Data"))
+                except Exception:
+                    candidate_node = None
+                if candidate_node is None:
+                    continue
+                candidate_specs.append((candidate_node, group_path_items[:index]))
+
+        seen_candidates = set()
+        for candidate_node, candidate_group_path in candidate_specs:
+            candidate_tree = getattr(getattr(candidate_node, "id_data", None), "name", "")
+            candidate_key = (
+                candidate_tree,
+                str(getattr(candidate_node, "name", "") or ""),
+                tuple(
+                    (
+                        str(item.get("tree_name", "") or ""),
+                        str(item.get("node_name", "") or ""),
+                    )
+                    for item in list(candidate_group_path or [])
+                    if isinstance(item, dict)
+                ),
+            )
+            if candidate_key in seen_candidates:
+                continue
+            seen_candidates.add(candidate_key)
+
+            object_list = _preview_object_list_from_downstream_context(
+                runner,
+                candidate_node,
+                group_path=candidate_group_path,
+            )
+            if _preview_seed_property_context_from_object_list(runner, object_list):
+                return True
+        return False
+
     def _preview_task_ref_payload_direct(runner, source_node):
         if runner is None or source_node is None:
             return None
@@ -276,6 +444,11 @@ def build_preview_node_classes(
                 source_socket = resolved_socket or source_socket
             except Exception:
                 resolved_group_path = list(getattr(runner, "current_group_path", []))
+
+        try:
+            _seed_preview_property_context(runner, source_node, source_socket, resolved_group_path)
+        except Exception:
+            pass
 
         if getattr(source_node, "bl_idname", "") == "AFNodeStorePropertyPackage":
             try:
@@ -763,8 +936,14 @@ def build_preview_node_classes(
         if mode == "DISPLAY_TYPE":
             return (f"Value: {_enum_identifier_label(OBJECT_DISPLAY_TYPE_ITEMS, payload)}",)
 
+        if mode == "OBJECT_INTERACTION_MODE":
+            return (f"Value: {_enum_identifier_label(OBJECT_INTERACTION_MODE_ITEMS, payload)}",)
+
         if mode == "ROTATION_MODE":
             return (f"Value: {_enum_identifier_label(OBJECT_ROTATION_MODE_ITEMS, payload)}",)
+
+        if mode == "VIEWPORT_SHADING_MODE":
+            return (f"Value: {_enum_identifier_label(VIEWPORT_SHADING_MODE_ITEMS, payload)}",)
 
         if mode == "PROPERTY_DEFINITION":
             return _preview_property_definition_lines(node, payload, max_items)
@@ -864,6 +1043,42 @@ def build_preview_node_classes(
         if mode == "TASK_PLAN":
             return _preview_task_plan_lines(node, payload, max_items)
 
+        if mode == "TASK_HANDLE":
+            report_payload = dict(payload.get("report", {}) or {}) if isinstance(payload, dict) else {}
+            task_kind = str(payload.get("task_kind", report_payload.get("task_kind", "TASK")) or "TASK")
+            status_value = str(payload.get("status", report_payload.get("status", "INVALID")) or "INVALID").strip()
+            lines = [task_kind.title()]
+            if status_value:
+                lines.append(af_iface("Status") + f": {status_value}")
+            task_id = str(payload.get("task_id", "") or "").strip()
+            if task_id:
+                lines.append("Task ID" + f": {task_id}")
+            node_name = str(payload.get("node_name", "") or "").strip()
+            if node_name:
+                lines.append("Node" + f": {node_name}")
+            if bool(payload.get("skipped", False) or report_payload.get("skipped", False)):
+                lines.append("Skipped: True")
+            if bool(payload.get("simulated", False) or report_payload.get("simulated", False)):
+                lines.append("Simulated: True")
+            if bool(payload.get("flow_test", False) or report_payload.get("flow_test", False)):
+                lines.append("Flow Test: True")
+            step_count = payload.get("step_count", report_payload.get("step_count", None))
+            if step_count is not None:
+                lines.append("Steps" + f": {step_count}")
+            frame_start = report_payload.get("frame_start", None)
+            frame_end = report_payload.get("frame_end", None)
+            if frame_start is not None or frame_end is not None:
+                lines.append(
+                    "Frames"
+                    + f": {frame_start if frame_start is not None else '?'} - {frame_end if frame_end is not None else '?'}"
+                )
+            error_message = str(report_payload.get("error_message", "") or "").strip()
+            if error_message:
+                lines.append("Error" + f": {error_message}")
+            if len(lines) > max_items + 1:
+                return tuple([*lines[: max_items + 1], "..."])
+            return tuple(lines)
+
         if mode == "REPORT":
             if isinstance(payload, dict):
                 lines = []
@@ -920,15 +1135,15 @@ def build_preview_node_classes(
                 _sync_preview_data_sockets(self)
             except Exception:
                 pass
+            effective_mode = _preview_effective_mode(self)
             header = layout.row(align=True)
             header.label(text=_preview_mode_label(self))
             header.prop(self, "preview_line_count", text="Max Lines")
-            preview_mode = str(getattr(self, "preview_mode", "OBJECT_LIST") or "OBJECT_LIST")
-            if preview_mode == "PROPERTY_PACKAGE":
+            if effective_mode == "PROPERTY_PACKAGE":
                 layout.prop(self, "preview_property_package_view_mode", expand=True)
-            elif preview_mode == "PROPERTY_DEFINITION":
+            elif effective_mode == "PROPERTY_DEFINITION":
                 layout.prop(self, "preview_property_definition_view_mode", expand=True)
-            elif preview_mode == "TASK_PLAN":
+            elif effective_mode == "TASK_PLAN":
                 layout.prop(self, "preview_task_plan_view_mode", expand=True)
             box = layout.box()
             for line in _preview_lines_for_payload(self, preview_context):
@@ -943,8 +1158,7 @@ def build_preview_node_classes(
                 if getattr(node, "bl_idname", "") != "AFNodePreviewData":
                     continue
                 try:
-                    if len(node.inputs) != 1 or getattr(node.inputs[0], "bl_idname", "") != "AFSocketPreviewData":
-                        _sync_preview_data_sockets(node)
+                    _sync_preview_data_sockets(node)
                     touched = True
                 except Exception:
                     continue

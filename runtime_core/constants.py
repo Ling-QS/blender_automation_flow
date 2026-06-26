@@ -65,6 +65,7 @@ BRANCH_START_NODE_TYPES = {"AFNodeBranchStart"}
 BRANCH_END_NODE_TYPES = {"AFNodeBranchEnd"}
 FLOW_SIDE_HOOK_NODE_TYPES = {
     "AFNodeFlowToggle",
+    "AFNodeFlowTrigger",
     "AFNodeTaskStatusOverride",
 }
 PROPERTY_PACKAGE_BAKE_ACTION_NAME_PREFIX = "AF_PropertyPackageBake::"
@@ -86,16 +87,96 @@ NUMERIC_SOCKET_FAMILY_BY_IDNAME = {
     "AFSocketFloatValue": "NodeSocketFloat",
     "AFSocketVectorValue": "NodeSocketVector",
 }
+_BUILTIN_SOCKET_FAMILY_PREFIXES = (
+    ("NodeSocketBool", "NodeSocketBool"),
+    ("NodeSocketInt", "NodeSocketInt"),
+    ("NodeSocketFloat", "NodeSocketFloat"),
+    ("NodeSocketVector", "NodeSocketVector"),
+    ("NodeSocketString", "NodeSocketString"),
+    ("NodeSocketRotation", "NodeSocketRotation"),
+    ("NodeSocketMatrix", "NodeSocketMatrix"),
+)
+
+
+def builtin_socket_family_by_idname(socket_type):
+    socket_type = str(socket_type or "")
+    if not socket_type:
+        return ""
+    for prefix, family in _BUILTIN_SOCKET_FAMILY_PREFIXES:
+        if socket_type == prefix or socket_type.startswith(prefix):
+            return family
+    return ""
+
+
+def numeric_socket_family_by_idname(socket_type):
+    socket_type = str(socket_type or "")
+    family = str(NUMERIC_SOCKET_FAMILY_BY_IDNAME.get(socket_type, "") or "")
+    if family:
+        return family
+    family = builtin_socket_family_by_idname(socket_type)
+    if family in {"NodeSocketBool", "NodeSocketInt", "NodeSocketFloat", "NodeSocketVector"}:
+        return family
+    return ""
+
+
+def string_socket_family_by_idname(socket_type):
+    socket_type = str(socket_type or "")
+    if socket_type == "AFSocketString":
+        return "NodeSocketString"
+    family = builtin_socket_family_by_idname(socket_type)
+    if family == "NodeSocketString":
+        return family
+    return ""
 
 ROTATION_IDENTITY_QUATERNION = (1.0, 0.0, 0.0, 0.0)
 GROUP_INPUT_DEFAULT_MISSING = object()
 PROPERTY_CONTEXT_DEPENDENT_DATA_NODE_TYPES = {
     "AFNodePropertyContext",
+    "AFNodeExtractPropertyAssignments",
+    "AFNodeSampleContextData",
     "AFNodeReduceContextValue",
     "AFNodeModifierPropertyData",
     "AFNodeObjectDisplayPropertyData",
     "AFNodeObjectTransformPropertyData",
     "AFNodeCreatePropertyPackage",
+    "AFNodeMath",
+    "AFNodeIntegerMath",
+    "AFNodeBooleanMath",
+    "AFNodeVectorMath",
+    "AFNodeMix",
+    "AFNodeSwitch",
+    "AFNodeIndexSwitch",
+    "AFNodeCompare",
+    "AFNodeConvertValue",
+    "AFNodeClamp",
+    "AFNodeMapRange",
+    "AFNodeCombineVector",
+    "AFNodeSeparateVector",
+    "AFNodeVectorRotate",
+    "AFNodeRotateVector",
+    "AFNodeEulerToRotation",
+    "AFNodeQuaternionToRotation",
+    "AFNodeAxisAngleToRotation",
+    "AFNodeInvertRotation",
+    "AFNodeRotateRotation",
+    "AFNodeRotationToEuler",
+    "AFNodeRotationToQuaternion",
+    "AFNodeRotationToAxisAngle",
+    "AFNodeAxesToRotation",
+    "AFNodeAlignRotationToVector",
+    "AFNodeCombineMatrix",
+    "AFNodeSeparateMatrix",
+    "AFNodeMatrixMultiply",
+    "AFNodeInvertMatrix",
+    "AFNodeTransposeMatrix",
+    "AFNodeMatrixDeterminant",
+    "AFNodeCombineTransform",
+    "AFNodeSeparateTransform",
+    "AFNodeTransformPoint",
+    "AFNodeTransformDirection",
+    "AFNodeProjectPoint",
+    "AFNodeSmoothstep",
+    "AFNodeRandomValue",
 }
 PROPERTY_CONTEXT_STATIC_DATA_NODE_TYPES = {
     "AFNodeFloatInput",
@@ -111,12 +192,13 @@ PROPERTY_CONTEXT_STATIC_DATA_NODE_TYPES = {
     "AFNodeViewportShadingState",
     "AFNodeBooleanEdge",
     "AFNodeBooleanLatch",
+    "AFNodeBooleanToggle",
     "AFNodeSceneTime",
     "AFNodeSceneObjectList",
     "AFNodeObjectInfo",
     "AFNodeTaskOutput",
     "AFNodeReadPropertyPackage",
-}
+} - PROPERTY_CONTEXT_DEPENDENT_DATA_NODE_TYPES
 
 
 class FlowExecutionError(Exception):

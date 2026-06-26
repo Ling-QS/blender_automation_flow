@@ -1,3 +1,5 @@
+import json
+
 import bpy
 from bpy.app.translations import pgettext_iface as iface_
 
@@ -13,8 +15,15 @@ def build_flow_node_classes(
     _start_node_auto_order_updated,
     _start_node_auto_follow_updated,
     _sync_group_node_sockets,
+    _ui_group_path,
     _ui_runner_for_node,
 ):
+    def _encoded_ui_group_path(node, context):
+        try:
+            return json.dumps(list(_ui_group_path(node, context) or []), ensure_ascii=True, separators=(",", ":"))
+        except Exception:
+            return "[]"
+
     class AFNodeGroup(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeGroup"
         bl_label = "Group"
@@ -131,13 +140,14 @@ def build_flow_node_classes(
             row.prop(self, "default_value", text=iface_("Initial"), toggle=True)
             current_value = bool(self._ui_current_state_value())
             current_op = row.operator(
-                "af.clear_flow_toggle_state",
+                "af.toggle_boolean_state",
                 text=iface_("Current"),
                 depress=current_value,
             )
             if current_op is not None:
                 current_op.node_tree_name = getattr(getattr(self, "id_data", None), "name", "")
                 current_op.node_name = self.name
+                current_op.group_path_json = _encoded_ui_group_path(self, context)
 
         def _ui_current_state_value(self):
             try:
@@ -147,6 +157,16 @@ def build_flow_node_classes(
             except Exception:
                 pass
             return bool(getattr(self, "default_value", False))
+
+    class AFNodeFlowTrigger(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeFlowTrigger"
+        bl_label = "Flow Trigger"
+        bl_icon = "BLANK1"
+
+        def init(self, context):
+            del context
+            self.inputs.new("AFSocketFlow", "Trigger")
+            self.outputs.new("NodeSocketBool", "Triggered")
 
     class AFNodeTaskStatusOverride(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeTaskStatusOverride"
@@ -383,6 +403,7 @@ def build_flow_node_classes(
         "AFNodeGroup": AFNodeGroup,
         "AFNodeStart": AFNodeStart,
         "AFNodeFlowToggle": AFNodeFlowToggle,
+        "AFNodeFlowTrigger": AFNodeFlowTrigger,
         "AFNodeTaskStatusOverride": AFNodeTaskStatusOverride,
         "AFNodeRepeatStart": AFNodeRepeatStart,
         "AFNodeRepeatEnd": AFNodeRepeatEnd,

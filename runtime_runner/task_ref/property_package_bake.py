@@ -228,9 +228,9 @@ class RuntimeTaskRefPropertyPackageBakeMixin:
         return normalized_path
 
     def _build_record_property_package_task_ref(self, node):
-        start_ref = self._resolve_property_package_bake_record_start(node)
+        resolved_start = self._resolve_property_package_bake_record_start(node)
         owner_tree_name = str(getattr(getattr(node, "id_data", None), "name", self.node_tree.name) or self.node_tree.name)
-        start_tree_name = str(start_ref.get("tree_name", "") or owner_tree_name)
+        start_tree_name = str(resolved_start.get("tree_name", "") or owner_tree_name)
         record_group_path = self._normalize_property_package_bake_record_group_path(
             getattr(self, "current_group_path", []),
             start_tree_name,
@@ -252,7 +252,7 @@ class RuntimeTaskRefPropertyPackageBakeMixin:
             node=node,
             owner_tree_name=owner_tree_name,
             start_tree_name=start_tree_name,
-            start_node_name=str(start_ref.get("start_node_name", "") or ""),
+            start_node_name=str(resolved_start.get("start_node_name", "") or ""),
             frame_start=frame_start,
             frame_end=frame_end,
             bake_asset_id=bake_asset_id,

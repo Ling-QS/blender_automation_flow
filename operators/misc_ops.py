@@ -1,8 +1,9 @@
+import json
+
 import bpy
 
 from .editor_utils import _tag_flow_node_editor_redraw
 from .flow_run import _get_active_runner
-from ..runtime_state.cache import _clear_flow_toggle_state
 
 
 class AF_OT_StopFlow(bpy.types.Operator):
@@ -106,14 +107,24 @@ class AF_OT_FocusNode(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class AF_OT_ClearFlowToggleState(bpy.types.Operator):
-    bl_idname = "af.clear_flow_toggle_state"
-    bl_label = "Reset Flow Toggle State"
-    bl_description = "Clear stored toggle state from this node"
+class AF_OT_ToggleBooleanState(bpy.types.Operator):
+    bl_idname = "af.toggle_boolean_state"
+    bl_label = "Toggle Boolean State"
+    bl_description = "Toggle stored boolean state from this node"
     bl_options = {"REGISTER", "UNDO"}
 
     node_tree_name: bpy.props.StringProperty(name="Node Tree Name", default="")
     node_name: bpy.props.StringProperty(name="Node Name", default="")
+    group_path_json: bpy.props.StringProperty(name="Group Path JSON", default="")
+
+    def _group_path(self):
+        try:
+            payload = json.loads(str(self.group_path_json or "[]"))
+        except Exception:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [dict(item) for item in payload if isinstance(item, dict)]
 
     def execute(self, context):
         if _get_active_runner() is not None:
@@ -126,8 +137,9 @@ class AF_OT_ClearFlowToggleState(bpy.types.Operator):
             return {"CANCELLED"}
 
         node = node_tree.nodes.get(self.node_name)
-        if node is None or getattr(node, "bl_idname", "") != "AFNodeFlowToggle":
-            self.report({"ERROR"}, "Flow Toggle node not found")
+        node_type = str(getattr(node, "bl_idname", "") or "")
+        if node is None or node_type not in {"AFNodeFlowToggle", "AFNodeBooleanToggle"}:
+            self.report({"ERROR"}, "Boolean state node not found")
             return {"CANCELLED"}
 
         scene = getattr(context, "scene", None) or bpy.context.scene
@@ -135,20 +147,21 @@ class AF_OT_ClearFlowToggleState(bpy.types.Operator):
             self.report({"ERROR"}, "Scene is not available")
             return {"CANCELLED"}
 
-        cleared_count = int(
-            _clear_flow_toggle_state(
-                scene,
-                getattr(node_tree, "name", ""),
-                getattr(node, "name", ""),
-                clear_all_paths=True,
-            )
-            or 0
-        )
+        from ..runtime_runner.core import FlowRunner
+
+        runner = FlowRunner(node_tree, scene)
+        group_path = self._group_path()
+        if node_type == "AFNodeFlowToggle":
+            current_value = bool(runner._read_flow_toggle_state(node, group_path))
+            new_value = not current_value
+            runner._write_flow_toggle_state(node, new_value, group_path)
+        else:
+            current_value = bool(runner._read_boolean_toggle_state(node, group_path))
+            new_value = not current_value
+            runner._write_boolean_toggle_state(node, new_value, group_path)
+        runner._flush_flow_toggle_cache()
         _tag_flow_node_editor_redraw(getattr(node_tree, "name", None))
-        if cleared_count <= 0:
-            self.report({"INFO"}, "No stored Flow Toggle state to clear")
-            return {"FINISHED"}
-        self.report({"INFO"}, "Cleared stored Flow Toggle state")
+        self.report({"INFO"}, f"Current state set to {'On' if new_value else 'Off'}")
         return {"FINISHED"}
 
 
@@ -156,5 +169,5 @@ MISC_OPERATOR_CLASSES = (
     AF_OT_StopFlow,
     AF_OT_ClearLogs,
     AF_OT_FocusNode,
-    AF_OT_ClearFlowToggleState,
+    AF_OT_ToggleBooleanState,
 )

@@ -25,6 +25,8 @@ GROUP_NODE_EXPORTS = (
     "_restore_group_socket_state",
     "_sync_visible_node_editor_sockets",
     "_sync_group_node_sockets",
+    "_apply_group_node_input_constraints",
+    "_apply_group_node_constraints_in_tree",
     "_replace_group_node_instance",
     "_hard_sync_group_node",
     "_iter_group_nodes_referencing_tree",
@@ -91,6 +93,9 @@ DYNAMIC_SOCKET_HELPER_EXPORTS = (
     "_context_reduce_output_key_for_type",
     "_default_index_switch_socket_name",
     "_default_property_assignment_socket_name",
+    "_find_reusable_socket",
+    "_sync_socket_collection_in_place",
+    "_sync_node_sockets_in_place",
     "_iter_create_property_package_assignment_inputs",
     "_iter_index_switch_real_inputs",
     "_sync_index_switch_sockets",
@@ -179,7 +184,6 @@ DISPLAY_HELPER_EXPORTS = (
 
 SOCKET_REBUILD_EXPORTS = (
     "_SOCKET_REBUILD_HELPERS",
-    "_rebuild_sockets",
     "_sync_parse_property_package_sockets",
     "_sync_refresh_property_package_sockets",
 )
@@ -191,6 +195,7 @@ INPUT_NODE_CLASS_NAMES = (
     "AFNodeViewportShadingState",
     "AFNodeBooleanEdge",
     "AFNodeBooleanLatch",
+    "AFNodeBooleanToggle",
     "AFNodeSceneTime",
     "AFNodeFloatInput",
     "AFNodeBooleanInput",
@@ -222,7 +227,8 @@ PREVIEW_NODE_EXPORTS = PREVIEW_NODE_CLASS_NAMES + (
 
 CONTEXT_GEOMETRY_NODE_CLASS_NAMES = (
     "AFNodePropertyContext",
-    "AFNodeSampleObjectIndex",
+    "AFNodeExtractPropertyAssignments",
+    "AFNodeSampleContextData",
     "AFNodeReduceContextValue",
     "AFNodeReadGeometryAttribute",
     "AFNodeSetGeometryAttribute",
@@ -230,7 +236,7 @@ CONTEXT_GEOMETRY_NODE_CLASS_NAMES = (
 )
 CONTEXT_GEOMETRY_NODE_EXPORTS = (
     "_sync_property_context_sockets",
-    "_sync_sample_object_index_sockets",
+    "_sync_sample_context_data_sockets",
     "_sync_context_reduce_value_sockets",
     "_sync_geometry_attribute_node_sockets",
     "_sync_set_geometry_attribute_node_sockets",
@@ -253,13 +259,13 @@ MATH_NODE_CLASS_NAMES = (
     "AFNodeSwitch",
     "AFNodeIndexSwitch",
     "AFNodeCompare",
-    "AFNodeStringCompare",
     "AFNodeConvertValue",
     "AFNodeClamp",
     "AFNodeMapRange",
     "AFNodeCombineVector",
     "AFNodeSeparateVector",
     "AFNodeVectorRotate",
+    "AFNodeRotateVector",
     "AFNodeEulerToRotation",
     "AFNodeQuaternionToRotation",
     "AFNodeAxisAngleToRotation",
@@ -303,6 +309,7 @@ FLOW_NODE_CLASS_NAMES = (
     "AFNodeGroup",
     "AFNodeStart",
     "AFNodeFlowToggle",
+    "AFNodeFlowTrigger",
     "AFNodeTaskStatusOverride",
     "AFNodeRepeatStart",
     "AFNodeRepeatEnd",
@@ -405,7 +412,6 @@ def build_support_helper_exports(
     PROPERTY_SOURCE_VALUE,
     _draw_compact_property_source,
     _hide_default_auxiliary_outputs,
-    _rebuild_sockets,
 ):
     group_helpers = build_group_node_helpers(
         AFNodeTree=AFNodeTree,
@@ -413,19 +419,6 @@ def build_support_helper_exports(
         GROUP_NODE_OUTPUT_IDENTIFIERS_KEY=GROUP_NODE_OUTPUT_IDENTIFIERS_KEY,
         GROUP_SUPPORTED_SOCKET_IDNAMES=GROUP_SUPPORTED_SOCKET_IDNAMES,
         NUMERIC_COMPATIBLE_SOCKET_IDNAMES=NUMERIC_COMPATIBLE_SOCKET_IDNAMES,
-        _rebuild_sockets=_rebuild_sockets,
-    )
-    task_helpers = build_task_node_helpers(
-        PHYSICS_BAKE_TASK_INPUT_PREFIX=PHYSICS_BAKE_TASK_INPUT_PREFIX,
-        PHYSICS_BAKE_TASK_SOCKET_IDNAME=PHYSICS_BAKE_TASK_SOCKET_IDNAME,
-        PHYSICS_BAKE_TASK_VIRTUAL_LABEL=PHYSICS_BAKE_TASK_VIRTUAL_LABEL,
-        RUN_TASK_PLAN_INPUT_PREFIX=RUN_TASK_PLAN_INPUT_PREFIX,
-        RUN_TASK_PLAN_VIRTUAL_LABEL=RUN_TASK_PLAN_VIRTUAL_LABEL,
-        TASK_STEP_INPUT_SPECS=TASK_STEP_INPUT_SPECS,
-        TASK_STEP_OUTPUT_SPECS=TASK_STEP_OUTPUT_SPECS,
-        iface_=iface_,
-        _hide_default_auxiliary_outputs=_hide_default_auxiliary_outputs,
-        _rebuild_sockets=_rebuild_sockets,
     )
     dynamic_socket_helpers = build_dynamic_socket_helpers(
         CONTEXT_REDUCE_OUTPUT_KEY_BY_TYPE=CONTEXT_REDUCE_OUTPUT_KEY_BY_TYPE,
@@ -437,7 +430,18 @@ def build_support_helper_exports(
         SAMPLE_OBJECT_INDEX_OUTPUT_KEY_BY_MODE=SAMPLE_OBJECT_INDEX_OUTPUT_KEY_BY_MODE,
         SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE=SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE,
         SWITCH_SOCKET_IDNAME_BY_MODE=SWITCH_SOCKET_IDNAME_BY_MODE,
-        _rebuild_sockets=_rebuild_sockets,
+    )
+    task_helpers = build_task_node_helpers(
+        PHYSICS_BAKE_TASK_INPUT_PREFIX=PHYSICS_BAKE_TASK_INPUT_PREFIX,
+        PHYSICS_BAKE_TASK_SOCKET_IDNAME=PHYSICS_BAKE_TASK_SOCKET_IDNAME,
+        PHYSICS_BAKE_TASK_VIRTUAL_LABEL=PHYSICS_BAKE_TASK_VIRTUAL_LABEL,
+        RUN_TASK_PLAN_INPUT_PREFIX=RUN_TASK_PLAN_INPUT_PREFIX,
+        RUN_TASK_PLAN_VIRTUAL_LABEL=RUN_TASK_PLAN_VIRTUAL_LABEL,
+        TASK_STEP_INPUT_SPECS=TASK_STEP_INPUT_SPECS,
+        TASK_STEP_OUTPUT_SPECS=TASK_STEP_OUTPUT_SPECS,
+        iface_=iface_,
+        _hide_default_auxiliary_outputs=_hide_default_auxiliary_outputs,
+        _sync_node_sockets_in_place=dynamic_socket_helpers["_sync_node_sockets_in_place"],
     )
     property_data_helpers = build_property_data_helpers(
         CUSTOM_MENU_SOCKET_IDNAMES=CUSTOM_MENU_SOCKET_IDNAMES,
@@ -445,8 +449,8 @@ def build_support_helper_exports(
         PROPERTY_SOURCE_VALUE=PROPERTY_SOURCE_VALUE,
         _draw_compact_property_source=_draw_compact_property_source,
         _find_single_from_input_socket=dynamic_socket_helpers["_find_single_from_input_socket"],
-        _rebuild_sockets=_rebuild_sockets,
         _socket_signature=lambda socket: task_helpers["_socket_signature"](socket),
+        _sync_node_sockets_in_place=dynamic_socket_helpers["_sync_node_sockets_in_place"],
     )
     return {
         "group_helpers": group_helpers,
@@ -500,16 +504,10 @@ def build_display_helper_exports(
 def build_socket_rebuild_exports(
     *,
     build_socket_rebuild_helpers,
-    _capture_dynamic_socket_state,
-    _restore_dynamic_socket_state,
 ):
-    socket_rebuild_helpers = build_socket_rebuild_helpers(
-        _capture_dynamic_socket_state=_capture_dynamic_socket_state,
-        _restore_dynamic_socket_state=_restore_dynamic_socket_state,
-    )
+    socket_rebuild_helpers = build_socket_rebuild_helpers()
     return {
         "_SOCKET_REBUILD_HELPERS": socket_rebuild_helpers,
-        "_rebuild_sockets": socket_rebuild_helpers["_rebuild_sockets"],
         "_sync_parse_property_package_sockets": socket_rebuild_helpers["_sync_parse_property_package_sockets"],
         "_sync_refresh_property_package_sockets": socket_rebuild_helpers["_sync_refresh_property_package_sockets"],
     }
@@ -555,11 +553,15 @@ def build_node_build_exports(namespace):
             INPUT_NODE_EXPORTS,
             dict(
                 AFBaseNode=ns["AFBaseNode"],
+                OBJECT_INTERACTION_MODE_ITEMS=ns["OBJECT_INTERACTION_MODE_ITEMS"],
                 STATUS_VALUE_ITEMS=ns["STATUS_VALUE_ITEMS"],
                 SCENE_TIME_OUTPUT_SOCKET_SPECS=ns["SCENE_TIME_OUTPUT_SOCKET_SPECS"],
+                VIEWPORT_SHADING_MODE_ITEMS=ns["VIEWPORT_SHADING_MODE_ITEMS"],
                 _hide_default_auxiliary_outputs=ns["_hide_default_auxiliary_outputs"],
                 _set_node_color=ns["_set_node_color"],
                 _status_value_display_label=ns["_status_value_display_label"],
+                _ui_group_path=ns["_ui_group_path"],
+                _ui_runner_for_node=ns["_ui_runner_for_node"],
             ),
         ),
         (
@@ -585,6 +587,7 @@ def build_node_build_exports(namespace):
             dict(
                 AFBaseNode=ns["AFBaseNode"],
                 OBJECT_DISPLAY_TYPE_ITEMS=ns["OBJECT_DISPLAY_TYPE_ITEMS"],
+                OBJECT_INTERACTION_MODE_ITEMS=ns["OBJECT_INTERACTION_MODE_ITEMS"],
                 OBJECT_ROTATION_MODE_ITEMS=ns["OBJECT_ROTATION_MODE_ITEMS"],
                 PREVIEW_DATA_MODE_BY_SOCKET_IDNAME=ns["PREVIEW_DATA_MODE_BY_SOCKET_IDNAME"],
                 PREVIEW_DATA_MODE_ITEMS=ns["PREVIEW_DATA_MODE_ITEMS"],
@@ -593,6 +596,7 @@ def build_node_build_exports(namespace):
                 PREVIEW_PROPERTY_DEFINITION_VIEW_MODE_ITEMS=ns["PREVIEW_PROPERTY_DEFINITION_VIEW_MODE_ITEMS"],
                 PREVIEW_PROPERTY_PACKAGE_VIEW_MODE_ITEMS=ns["PREVIEW_PROPERTY_PACKAGE_VIEW_MODE_ITEMS"],
                 PREVIEW_TASK_PLAN_VIEW_MODE_ITEMS=ns["PREVIEW_TASK_PLAN_VIEW_MODE_ITEMS"],
+                VIEWPORT_SHADING_MODE_ITEMS=ns["VIEWPORT_SHADING_MODE_ITEMS"],
                 _enum_identifier_label=ns["_enum_identifier_label"],
                 _find_single_from_input_socket=ns["_find_single_from_input_socket"],
                 _hide_default_auxiliary_outputs=ns["_hide_default_auxiliary_outputs"],
@@ -604,9 +608,9 @@ def build_node_build_exports(namespace):
                 _property_definition_has_content=ns["_property_definition_has_content"],
                 _property_role_label=ns["_property_role_label"],
                 _property_scope_label=ns["_property_scope_label"],
-                _rebuild_sockets=ns["_rebuild_sockets"],
                 _set_default_node_width=ns["_set_default_node_width"],
                 _summarize_property_package=ns["_summarize_property_package"],
+                _sync_node_sockets_in_place=ns["_sync_node_sockets_in_place"],
                 _ui_runner_for_node=ns["_ui_runner_for_node"],
             ),
         ),
@@ -623,11 +627,13 @@ def build_node_build_exports(namespace):
                 GEOMETRY_ATTRIBUTE_VALUE_TYPE_ITEMS=ns["GEOMETRY_ATTRIBUTE_VALUE_TYPE_ITEMS"],
                 SAMPLE_OBJECT_INDEX_MODE_ITEMS=ns["SAMPLE_OBJECT_INDEX_MODE_ITEMS"],
                 SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE=ns["SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE"],
+                PREVIEW_DATA_VIRTUAL_LABEL=ns["PREVIEW_DATA_VIRTUAL_LABEL"],
+                _find_single_from_input_socket=ns["_find_single_from_input_socket"],
                 _hide_default_auxiliary_outputs=ns["_hide_default_auxiliary_outputs"],
-                _rebuild_sockets=ns["_rebuild_sockets"],
                 _set_default_node_width=ns["_set_default_node_width"],
                 _set_node_color=ns["_set_node_color"],
                 _socket_signature=ns["_socket_signature"],
+                _sync_node_sockets_in_place=ns["_sync_node_sockets_in_place"],
             ),
         ),
         (
@@ -669,6 +675,7 @@ def build_node_build_exports(namespace):
                 INDEX_SWITCH_MODE_ITEMS=ns["INDEX_SWITCH_MODE_ITEMS"],
                 INTEGER_MATH_OPERATION_ITEMS=ns["INTEGER_MATH_OPERATION_ITEMS"],
                 MIX_MODE_ITEMS=ns["MIX_MODE_ITEMS"],
+                MAP_RANGE_MODE_ITEMS=ns["MAP_RANGE_MODE_ITEMS"],
                 RANDOM_TYPE_ITEMS=ns["RANDOM_TYPE_ITEMS"],
                 ROTATION_AXIS_ITEMS=ns["ROTATION_AXIS_ITEMS"],
                 ROTATION_PIVOT_AXIS_ITEMS=ns["ROTATION_PIVOT_AXIS_ITEMS"],
@@ -679,10 +686,10 @@ def build_node_build_exports(namespace):
                 VECTOR_COMPONENT_MODE_ITEMS=ns["VECTOR_COMPONENT_MODE_ITEMS"],
                 VECTOR_MATH_OPERATION_ITEMS=ns["VECTOR_MATH_OPERATION_ITEMS"],
                 _enum_property_label=ns["_enum_property_label"],
-                _rebuild_sockets=ns["_rebuild_sockets"],
                 _set_default_node_width=ns["_set_default_node_width"],
                 _set_node_color=ns["_set_node_color"],
                 _switch_socket_idname_for_mode=ns["_switch_socket_idname_for_mode"],
+                _sync_node_sockets_in_place=ns["_sync_node_sockets_in_place"],
                 _sync_index_switch_sockets=ns["_sync_index_switch_sockets"],
             ),
         ),
@@ -720,6 +727,7 @@ def build_node_build_exports(namespace):
                 _start_node_auto_order_updated=ns["_start_node_auto_order_updated"],
                 _start_node_auto_follow_updated=ns["_start_node_auto_follow_updated"],
                 _sync_group_node_sockets=ns["_sync_group_node_sockets"],
+                _ui_group_path=ns["_ui_group_path"],
                 _ui_runner_for_node=ns["_ui_runner_for_node"],
             ),
         ),
@@ -761,26 +769,6 @@ def build_nodes_module_exports(namespace):
     )
     socket_rebuild_exports = build_socket_rebuild_exports(
         build_socket_rebuild_helpers=ns["build_socket_rebuild_helpers"],
-        _capture_dynamic_socket_state=lambda node, direction, include_default_values=True: ns[
-            "_capture_dynamic_socket_state"
-        ](
-            node,
-            direction,
-            include_default_values=include_default_values,
-        ),
-        _restore_dynamic_socket_state=lambda node,
-        direction,
-        state,
-        socket_specs,
-        restore_default_values=True,
-        restore_hide_state=True: ns["_restore_dynamic_socket_state"](
-            node,
-            direction,
-            state,
-            socket_specs,
-            restore_default_values=restore_default_values,
-            restore_hide_state=restore_hide_state,
-        ),
     )
     support_helper_exports = build_support_helper_exports(
         build_group_node_helpers=ns["build_group_node_helpers"],
@@ -814,7 +802,6 @@ def build_nodes_module_exports(namespace):
         PROPERTY_SOURCE_VALUE=ns["PROPERTY_SOURCE_VALUE"],
         _draw_compact_property_source=display_helper_exports["_draw_compact_property_source"],
         _hide_default_auxiliary_outputs=display_helper_exports["_hide_default_auxiliary_outputs"],
-        _rebuild_sockets=socket_rebuild_exports["_rebuild_sockets"],
     )
     return {
         "display_helper_exports": display_helper_exports,

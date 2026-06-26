@@ -10,7 +10,7 @@ class RuntimeNodeUtilsMixin:
             return None
         node_type = str(getattr(node, "bl_idname", "") or "")
         previous_group_path = list(self.current_group_path)
-        if node_type == "AFNodeFlowToggle" and output_key == "bool_value":
+        if node_type in {"AFNodeFlowToggle", "AFNodeFlowTrigger"} and output_key == "bool_value":
             return self._get_output(node, output_key, previous_group_path)
         if node_type in self.DATA_NODE_TYPES:
             previous_preview_read_only = bool(getattr(self, "_preview_data_node_read_only", False))

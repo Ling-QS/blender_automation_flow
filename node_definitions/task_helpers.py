@@ -12,7 +12,7 @@ def build_task_node_helpers(
     TASK_STEP_OUTPUT_SPECS,
     iface_,
     _hide_default_auxiliary_outputs,
-    _rebuild_sockets,
+    _sync_node_sockets_in_place,
 ):
     run_task_plan_sync_guard = set()
 
@@ -238,7 +238,7 @@ def build_task_node_helpers(
         output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
         if input_signature == TASK_STEP_INPUT_SPECS and output_signature == TASK_STEP_OUTPUT_SPECS:
             return
-        _rebuild_sockets(node, TASK_STEP_INPUT_SPECS, TASK_STEP_OUTPUT_SPECS)
+        _sync_node_sockets_in_place(node, TASK_STEP_INPUT_SPECS, TASK_STEP_OUTPUT_SPECS)
 
     def _sync_task_output_sockets(node):
         input_specs = (
@@ -252,7 +252,7 @@ def build_task_node_helpers(
         input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
         output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
         if input_signature != input_specs or output_signature != output_specs:
-            _rebuild_sockets(node, input_specs, output_specs)
+            _sync_node_sockets_in_place(node, input_specs, output_specs)
         status_input = getattr(node, "inputs", {}).get("Status") if hasattr(getattr(node, "inputs", None), "get") else None
         if status_input is not None:
             try:
@@ -269,7 +269,7 @@ def build_task_node_helpers(
         input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
         output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
         if input_signature != input_specs or output_signature != output_specs:
-            _rebuild_sockets(node, input_specs, output_specs)
+            _sync_node_sockets_in_place(node, input_specs, output_specs)
 
     def _sync_run_background_task_plan_sockets(node):
         input_specs = (
@@ -285,7 +285,7 @@ def build_task_node_helpers(
         input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
         output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
         if input_signature != input_specs or output_signature != output_specs:
-            _rebuild_sockets(node, input_specs, output_specs)
+            _sync_node_sockets_in_place(node, input_specs, output_specs)
 
     return {
         "_socket_signature": _socket_signature,

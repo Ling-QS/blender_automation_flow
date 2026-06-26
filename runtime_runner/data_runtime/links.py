@@ -16,7 +16,18 @@ from ...runtime_math.values import _matrix_to_payload, _quaternion_to_payload
 
 class RuntimeLinksMixin:
     def _input_socket(self, node, *names):
-        return find_node_input_socket(node, *names)
+        if node is None or not names:
+            return None
+        normalized_names = tuple(str(name or "") for name in names)
+        node_token = self._node_cache_token(node)
+        cache_key = (node_token, normalized_names)
+        cache = getattr(self, "_node_input_socket_cache", None)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
+        socket = find_node_input_socket(node, *normalized_names)
+        if cache is not None:
+            cache[cache_key] = socket
+        return socket
 
     def _resolve_group_input_parent_socket(self, group_input_node, from_socket, group_path):
         if not group_path:
@@ -85,7 +96,9 @@ class RuntimeLinksMixin:
                 "string_value",
                 "status",
                 "display_type_value",
+                "object_interaction_mode_value",
                 "rotation_mode_value",
+                "viewport_shading_mode_value",
             }:
                 return str(default_value)
         except Exception:
@@ -125,6 +138,9 @@ class RuntimeLinksMixin:
         value = self._socket_default_output_value(parent_input_socket, output_key)
         if value is not GROUP_INPUT_DEFAULT_MISSING:
             return _copy_runtime_state_value(value)
+        fallback_value = self._typed_empty_output_value(output_key, group_input_node)
+        if fallback_value is not None:
+            return _copy_runtime_state_value(fallback_value)
         return GROUP_INPUT_DEFAULT_MISSING
 
     def _resolve_group_output_source(self, group_node, from_socket, group_path):
@@ -147,11 +163,10 @@ class RuntimeLinksMixin:
 
         group_output_input_socket = group_output_node.inputs[socket_index]
         upstream_node, upstream_socket = _find_single_from_input_socket(group_output_input_socket)
-        if upstream_node is None:
-            return None, None, []
-
         child_group_path = list(group_path or [])
         child_group_path.append(self._make_step_ref(group_node))
+        if upstream_node is None:
+            return group_output_node, group_output_input_socket, child_group_path
         return upstream_node, upstream_socket, child_group_path
 
     def _trace_output_source(self, from_node, from_socket, group_path=None, output_key=None):
@@ -189,16 +204,34 @@ class RuntimeLinksMixin:
                 return default_value
 
         if not force_fresh_data_eval:
-            value = self._resolve_output_value(from_node, from_socket, output_key, active_group_path)
+            value = self._resolve_output_value(
+                from_node,
+                from_socket,
+                output_key,
+                active_group_path,
+                allow_missing_fallback=False,
+            )
             if value is not None:
                 return value
 
         if output_key == "property_assignment":
-            definition_value = self._resolve_output_value(from_node, from_socket, "property_definition", active_group_path)
+            definition_value = self._resolve_output_value(
+                from_node,
+                from_socket,
+                "property_definition",
+                active_group_path,
+                allow_missing_fallback=False,
+            )
             if definition_value is not None:
                 return _property_definition_to_assignment(definition_value, str(getattr(from_node, "name", "") or PROPERTY_ASSIGNMENT_SOCKET_NAME))
         if output_key == "property_definition":
-            assignment_value = self._resolve_output_value(from_node, from_socket, "property_assignment", active_group_path)
+            assignment_value = self._resolve_output_value(
+                from_node,
+                from_socket,
+                "property_assignment",
+                active_group_path,
+                allow_missing_fallback=False,
+            )
             if assignment_value is not None:
                 return _property_assignment_to_definition_payload(assignment_value, str(getattr(from_node, "name", "") or PROPERTY_DEFINITION_SOCKET_NAME))
 
@@ -210,7 +243,13 @@ class RuntimeLinksMixin:
             finally:
                 self.current_group_path = previous_group_path
 
-        value = self._resolve_output_value(from_node, from_socket, output_key, active_group_path)
+        value = self._resolve_output_value(
+            from_node,
+            from_socket,
+            output_key,
+            active_group_path,
+            allow_missing_fallback=False,
+        )
         if value is not None:
             return value
 
@@ -241,6 +280,11 @@ class RuntimeLinksMixin:
                 return property_package
             if output_key == "report" and report is not None:
                 return report
+
+        if from_socket is not None and self._socket_supports_output_key(from_socket, output_key):
+            fallback_value = self._typed_empty_output_value(output_key, from_node)
+            if fallback_value is not None:
+                return fallback_value
 
         return None
 

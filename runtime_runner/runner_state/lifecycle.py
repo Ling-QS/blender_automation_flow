@@ -17,6 +17,7 @@ class RuntimeLifecycleMixin:
         self._geometry_attribute_cache.clear()
         self._object_lookup_cache.clear()
         self._property_assignment_plan_cache.clear()
+        self._boolean_toggle_run_states.clear()
         self.last_snapshot_package = None
         self.tasks.clear()
         self.current_wait = None

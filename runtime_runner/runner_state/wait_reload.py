@@ -8,6 +8,7 @@ from ...runtime_core.constants import (
     STATUS_WAITING,
     FlowExecutionError,
 )
+from ...runtime_flow.helpers import _find_single_from_input_socket
 
 
 class RuntimeWaitReloadMixin:
@@ -22,9 +23,11 @@ class RuntimeWaitReloadMixin:
         return None
 
     def _execute_wait_for_task_node(self, node):
-        task_handle_payload = self._get_linked_output(node, "Task Handle", "task_handle")
-        if task_handle_payload is None:
+        if _find_single_from_input_socket(node.inputs["Task Handle"])[0] is None:
             raise FlowExecutionError("AF_E011", "Task Handle input is not linked", node.name)
+        task_handle_payload = self._get_linked_output(node, "Task Handle", "task_handle")
+        if not self._is_valid_reference_payload("task_handle", task_handle_payload):
+            raise FlowExecutionError("AF_E011", "Task Handle input is invalid", node.name)
         live_handle = self._resolve_live_task_handle(task_handle_payload)
         if live_handle is None:
             raise FlowExecutionError("AF_E011", "Task Handle input is invalid", node.name)
@@ -78,9 +81,11 @@ class RuntimeWaitReloadMixin:
         return FLOW_WAIT, None
 
     def _execute_reload_after_task_node(self, node, dry_run=False, flow_test=False):
-        task_handle_payload = self._get_linked_output(node, "Task Handle", "task_handle")
-        if task_handle_payload is None:
+        if _find_single_from_input_socket(node.inputs["Task Handle"])[0] is None:
             raise FlowExecutionError("AF_E011", "Task Handle input is not linked", node.name)
+        task_handle_payload = self._get_linked_output(node, "Task Handle", "task_handle")
+        if not self._is_valid_reference_payload("task_handle", task_handle_payload):
+            raise FlowExecutionError("AF_E011", "Task Handle input is invalid", node.name)
         live_handle = self._resolve_live_task_handle(task_handle_payload)
         if live_handle is None:
             raise FlowExecutionError("AF_E011", "Task Handle input is invalid", node.name)

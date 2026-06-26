@@ -7,6 +7,8 @@ class RuntimeFlowControlMixin:
         node_type = str(getattr(node, "bl_idname", "") or "")
         if node_type == "AFNodeFlowToggle":
             return self._execute_flow_toggle(node)
+        if node_type == "AFNodeFlowTrigger":
+            return self._execute_flow_trigger(node)
         if node_type == "AFNodeTaskStatusOverride":
             return self._execute_task_status_override(node)
         raise FlowExecutionError("AF_E009", f"Unsupported flow side-hook type: {node_type}", getattr(node, "name", ""))
@@ -219,6 +221,10 @@ class RuntimeFlowControlMixin:
             },
         )
         return FLOW_OK, toggled_value
+
+    def _execute_flow_trigger(self, node):
+        self._set_output(node, "bool_value", True)
+        return FLOW_OK, True
 
     def _execute_task_status_override(self, node):
         status_value = str(self._input_string(node, "Status", "") or "")

@@ -1,7 +1,7 @@
 import bpy
 
 from ...node_system.socket_aliases import PROPERTY_PACKAGE_SOCKET_NAME
-from ...runtime_core.constants import FlowExecutionError, TASK_PLAN_KIND
+from ...runtime_core.constants import FlowExecutionError
 from ...runtime_flow.helpers import _find_single_from_input_socket
 from ...runtime_task_ref.refs import _invalid_task_ref_issue
 
@@ -152,10 +152,10 @@ class RuntimeActionPrecheckMixin:
                 issues.append(self._make_issue("AF_E011", "Task Ref input is not linked", node.name))
                 return issues
             task_ref = self._get_linked_output(node, "Task Ref", "task_ref")
-            if task_ref is None:
+            invalid_issue = None if self._is_valid_reference_payload("task_ref", task_ref) else _invalid_task_ref_issue(task_ref)
+            if invalid_issue is None and not isinstance(task_ref, dict):
                 issues.append(self._make_issue("AF_E011", "Task Ref not found", node.name))
                 return issues
-            invalid_issue = _invalid_task_ref_issue(task_ref)
             if invalid_issue is not None:
                 issues.append(
                     self._make_issue(
@@ -168,7 +168,7 @@ class RuntimeActionPrecheckMixin:
 
         if _find_single_from_input_socket(node.inputs["Task Plan"])[0] is not None:
             task_plan = self._get_linked_output(node, "Task Plan", "task_plan")
-            if task_plan is None or str(task_plan.get("plan_kind", "")) != TASK_PLAN_KIND:
+            if not self._is_valid_reference_payload("task_plan", task_plan):
                 issues.append(self._make_issue("AF_E011", "Task Plan input is not linked to a valid Task Plan", node.name))
             else:
                 issues.extend(self._validate_background_task_plan(node, task_plan))

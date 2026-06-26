@@ -64,6 +64,8 @@ _AF_ZH_LABELS = {
     "Task Plan": _zh("\\u4efb\\u52a1\\u8ba1\\u5212"),
     "Context": _zh("\\u4e0a\\u4e0b\\u6587"),
     "Enabled": _zh("\\u5df2\\u542f\\u7528"),
+    "Power": _zh("\\u4e58\\u65b9"),
+    "Raise to Power": _zh("\\u4e58\\u65b9"),
 }
 
 _STATUS_IDENTIFIER_LABELS = {

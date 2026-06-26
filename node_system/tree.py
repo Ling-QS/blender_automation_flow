@@ -2,31 +2,28 @@ import bpy
 from bpy.app.handlers import persistent
 
 from ..runtime_core.registration import safe_register_class, safe_unregister_class
+from ..runtime_core.constants import (
+    builtin_socket_family_by_idname,
+    numeric_socket_family_by_idname,
+    string_socket_family_by_idname,
+)
 
 _SYNC_RETRY_COUNTS = {}
 _SYNC_TIMER_ACTIVE = False
 _GROUP_TREE_SYNC_RETRY_COUNTS = {}
 _GROUP_TREE_SYNC_TIMER_ACTIVE = False
 _GROUP_NODE_CONSISTENCY_TIMER_ACTIVE = False
+_TIMER_GENERATION = 0
 _SYNC_SUSPENDED = False
 _TREE_RUNTIME_REVISIONS = {}
 _AUTO_CAST_LINK_DEPTH = 0
 _REROUTE_DEFAULT_SOCKET = "NodeSocketColor"
 _INVALID_SOCKET_IDNAMES = {"", "NodeSocketVirtual", "NodeSocketUndefined"}
-_NUMERIC_SOCKET_FAMILY_BY_IDNAME = {
-    "NodeSocketBool": "NodeSocketBool",
-    "NodeSocketInt": "NodeSocketInt",
-    "NodeSocketFloat": "NodeSocketFloat",
-    "NodeSocketVector": "NodeSocketVector",
-    "AFSocketBooleanValue": "NodeSocketBool",
-    "AFSocketIntegerValue": "NodeSocketInt",
-    "AFSocketFloatValue": "NodeSocketFloat",
-    "AFSocketVectorValue": "NodeSocketVector",
-}
-_NUMERIC_SOCKET_IDNAMES = set(_NUMERIC_SOCKET_FAMILY_BY_IDNAME.keys())
-_STRING_SOCKET_FAMILY_BY_IDNAME = {
-    "NodeSocketString": "NodeSocketString",
-    "AFSocketString": "NodeSocketString",
+_NUMERIC_SOCKET_FAMILY_IDNAMES = {
+    "NodeSocketBool",
+    "NodeSocketInt",
+    "NodeSocketFloat",
+    "NodeSocketVector",
 }
 _CONVERSION_MODE_BY_SOCKET_TYPES = {
     ("NodeSocketBool", "NodeSocketInt"): "BOOL_TO_INT",
@@ -43,10 +40,11 @@ _CONVERSION_MODE_BY_SOCKET_TYPES = {
     ("NodeSocketVector", "NodeSocketFloat"): "VECTOR_TO_FLOAT",
 }
 _PREVIEW_DYNAMIC_SOCKET_IDNAME = "AFSocketPreviewData"
+_SAMPLE_CONTEXT_DYNAMIC_NODE_IDNAME = "AFNodeSampleContextData"
 _PREVIEW_DYNAMIC_MODE_TO_SOCKET = {
     "OBJECT": "AFSocketObjectList",
     "OBJECT_LIST": "AFSocketObjectList",
-    "STRING": "NodeSocketString",
+    "STRING": "AFSocketString",
     "BOOLEAN": "NodeSocketBool",
     "INTEGER": "NodeSocketInt",
     "FLOAT": "NodeSocketFloat",
@@ -54,6 +52,7 @@ _PREVIEW_DYNAMIC_MODE_TO_SOCKET = {
     "ROTATION": "NodeSocketRotation",
     "MATRIX": "NodeSocketMatrix",
     "DISPLAY_TYPE": "AFSocketDisplayType",
+    "OBJECT_INTERACTION_MODE": "AFSocketObjectInteractionMode",
     "ROTATION_MODE": "AFSocketRotationMode",
     "PROPERTY_DEFINITION": "AFSocketPropertyDefinition",
     "PROPERTY_ASSIGNMENT": "AFSocketPropertyAssignment",
@@ -61,9 +60,24 @@ _PREVIEW_DYNAMIC_MODE_TO_SOCKET = {
     "TASK_REF": "AFSocketTaskRef",
     "TASK_PLAN": "AFSocketTaskPlan",
     "TASK_HANDLE": "AFSocketTaskHandle",
+    "VIEWPORT_SHADING_MODE": "AFSocketViewportShadingMode",
     "REPORT": "AFSocketReport",
 }
-_PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES = set(_PREVIEW_DYNAMIC_MODE_TO_SOCKET.values())
+_PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES = set(_PREVIEW_DYNAMIC_MODE_TO_SOCKET.values()) | {"NodeSocketString"}
+_SAMPLE_CONTEXT_DYNAMIC_EXACT_SOCKET_TYPES = {
+    "AFSocketString",
+    "AFSocketBooleanValue",
+    "AFSocketIntegerValue",
+    "AFSocketFloatValue",
+    "AFSocketVectorValue",
+    "AFSocketRotationValue",
+    "AFSocketMatrixValue",
+    "AFSocketDisplayType",
+    "AFSocketObjectInteractionMode",
+    "AFSocketRotationMode",
+    "AFSocketViewportShadingMode",
+    "AFSocketPropertyAssignment",
+}
 
 
 def suspend_runtime_sync():
@@ -78,6 +92,16 @@ def resume_runtime_sync():
 
 def _runtime_sync_enabled():
     return not _SYNC_SUSPENDED
+
+
+def _advance_timer_generation():
+    global _TIMER_GENERATION
+    _TIMER_GENERATION += 1
+    return _TIMER_GENERATION
+
+
+def _timer_generation_matches(timer_generation):
+    return int(timer_generation) == int(_TIMER_GENERATION)
 
 
 def _tree_runtime_revision_key(node_tree):
@@ -119,12 +143,60 @@ def _socket_idname(socket):
     return str(getattr(socket, "bl_idname", "") or "")
 
 
+def _is_preview_dynamic_socket(node, socket):
+    return bool(
+        getattr(node, "bl_idname", "") == "AFNodePreviewData"
+        and _socket_idname(socket) == _PREVIEW_DYNAMIC_SOCKET_IDNAME
+    )
+
+
+def _is_sample_context_dynamic_socket(node, socket):
+    return bool(
+        getattr(node, "bl_idname", "") == _SAMPLE_CONTEXT_DYNAMIC_NODE_IDNAME
+        and _socket_idname(socket) == _PREVIEW_DYNAMIC_SOCKET_IDNAME
+        and not bool(getattr(socket, "is_output", False))
+    )
+
+
+def _preview_dynamic_link_supported(from_socket_type, to_node, to_socket):
+    return bool(
+        _is_preview_dynamic_socket(to_node, to_socket)
+        and str(from_socket_type or "") in _PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES
+    )
+
+
+def _sample_context_dynamic_socket_type_supported(socket_type):
+    socket_type = str(socket_type or "")
+    if not socket_type:
+        return False
+    if socket_type in _SAMPLE_CONTEXT_DYNAMIC_EXACT_SOCKET_TYPES:
+        return True
+    return builtin_socket_family_by_idname(socket_type) in {
+        "NodeSocketBool",
+        "NodeSocketInt",
+        "NodeSocketFloat",
+        "NodeSocketVector",
+        "NodeSocketString",
+        "NodeSocketRotation",
+        "NodeSocketMatrix",
+    }
+
+
+def _sample_context_dynamic_link_supported(from_socket_type, to_node, to_socket):
+    return bool(
+        _is_sample_context_dynamic_socket(to_node, to_socket)
+        and _sample_context_dynamic_socket_type_supported(from_socket_type)
+    )
+
+
 def _normalize_numeric_socket_type(socket_type):
-    return _NUMERIC_SOCKET_FAMILY_BY_IDNAME.get(str(socket_type or ""), str(socket_type or ""))
+    normalized = numeric_socket_family_by_idname(socket_type)
+    return normalized or str(socket_type or "")
 
 
 def _normalize_string_socket_type(socket_type):
-    return _STRING_SOCKET_FAMILY_BY_IDNAME.get(str(socket_type or ""), str(socket_type or ""))
+    normalized = string_socket_family_by_idname(socket_type)
+    return normalized or str(socket_type or "")
 
 
 def _effective_socket_type(node, socket):
@@ -141,6 +213,11 @@ def _effective_socket_type(node, socket):
         return _PREVIEW_DYNAMIC_MODE_TO_SOCKET.get(preview_mode, "")
     if socket_idname == "AFSocketRotationValue":
         return "NodeSocketRotation"
+    if socket_idname == "AFSocketMatrixValue":
+        return "NodeSocketMatrix"
+    normalized_numeric = numeric_socket_family_by_idname(socket_idname)
+    if normalized_numeric:
+        return normalized_numeric
     normalized_string = _normalize_string_socket_type(socket_idname)
     if normalized_string == "NodeSocketString":
         return normalized_string
@@ -172,11 +249,9 @@ def _link_types_are_compatible(from_socket_type, to_socket_type):
         return False
     if from_socket_type == to_socket_type:
         return True
-    if from_socket_type == _PREVIEW_DYNAMIC_SOCKET_IDNAME and to_socket_type in _PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES:
-        return True
-    if to_socket_type == _PREVIEW_DYNAMIC_SOCKET_IDNAME and from_socket_type in _PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES:
-        return True
-    if from_socket_type in _NUMERIC_SOCKET_IDNAMES and to_socket_type in _NUMERIC_SOCKET_IDNAMES:
+    normalized_from = numeric_socket_family_by_idname(from_socket_type)
+    normalized_to = numeric_socket_family_by_idname(to_socket_type)
+    if normalized_from in _NUMERIC_SOCKET_FAMILY_IDNAMES and normalized_to in _NUMERIC_SOCKET_FAMILY_IDNAMES:
         return True
     if _normalize_string_socket_type(from_socket_type) == "NodeSocketString" and _normalize_string_socket_type(to_socket_type) == "NodeSocketString":
         return True
@@ -188,6 +263,8 @@ def _link_types_are_compatible(from_socket_type, to_socket_type):
 
 def _link_should_auto_convert(link):
     if link is None:
+        return None
+    if _is_preview_dynamic_socket(getattr(link, "to_node", None), getattr(link, "to_socket", None)):
         return None
     if getattr(link.to_node, "bl_idname", "") == "NodeReroute":
         return None
@@ -214,21 +291,30 @@ def _refresh_link_validity(node_tree):
         from_socket_type = _effective_socket_type(from_node, getattr(link, "from_socket", None))
         to_socket_type = _effective_socket_type(to_node, getattr(link, "to_socket", None))
 
-        preview_virtual_link = bool(
-            getattr(to_node, "bl_idname", "") == "AFNodePreviewData"
-            and _socket_idname(getattr(link, "to_socket", None)) == _PREVIEW_DYNAMIC_SOCKET_IDNAME
-            and bool(getattr(getattr(link, "to_socket", None), "af_is_virtual", False))
-            and from_socket_type in _PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES
+        preview_dynamic_link = _preview_dynamic_link_supported(
+            from_socket_type,
+            to_node,
+            getattr(link, "to_socket", None),
+        )
+        sample_context_dynamic_link = _sample_context_dynamic_link_supported(
+            from_socket_type,
+            to_node,
+            getattr(link, "to_socket", None),
         )
         if not from_socket_type or not to_socket_type:
             # Keep unresolved reroute staging links editable until the chain type settles.
             is_supported = bool(
                 getattr(from_node, "bl_idname", "") == "NodeReroute"
                 or getattr(to_node, "bl_idname", "") == "NodeReroute"
-                or preview_virtual_link
+                or preview_dynamic_link
+                or sample_context_dynamic_link
             )
         else:
-            is_supported = _link_types_are_compatible(from_socket_type, to_socket_type)
+            is_supported = bool(
+                preview_dynamic_link
+                or sample_context_dynamic_link
+                or _link_types_are_compatible(from_socket_type, to_socket_type)
+            )
         previous_valid = bool(getattr(link, "is_valid", True))
         _mark_link_validity(link, is_supported)
         if previous_valid != bool(is_supported):
@@ -326,6 +412,7 @@ def _dynamic_node_sync_callbacks(node_tree, *, include_pair_sync):
         "run_background_task_plan_sync_fn": getattr(nodes_module, "_sync_run_background_task_plan_sockets", None),
         "index_switch_sync_fn": getattr(nodes_module, "_sync_index_switch_sockets", None),
         "preview_data_sync_fn": getattr(nodes_module, "_sync_preview_data_sockets", None),
+        "sample_context_data_sync_fn": getattr(nodes_module, "_sync_sample_context_data_sockets", None),
         "parse_property_package_sync_fn": getattr(nodes_module, "_sync_parse_property_package_sockets", None),
         "refresh_property_package_sync_fn": getattr(nodes_module, "_sync_refresh_property_package_sockets", None),
         "hide_report_outputs_fn": getattr(nodes_module, "_hide_report_outputs", None),
@@ -350,6 +437,7 @@ def _sync_dynamic_node_with_callbacks(node, callbacks):
     run_background_task_plan_sync_fn = callbacks.get("run_background_task_plan_sync_fn")
     index_switch_sync_fn = callbacks.get("index_switch_sync_fn")
     preview_data_sync_fn = callbacks.get("preview_data_sync_fn")
+    sample_context_data_sync_fn = callbacks.get("sample_context_data_sync_fn")
     parse_property_package_sync_fn = callbacks.get("parse_property_package_sync_fn")
     refresh_property_package_sync_fn = callbacks.get("refresh_property_package_sync_fn")
     hide_report_outputs_fn = callbacks.get("hide_report_outputs_fn")
@@ -366,6 +454,7 @@ def _sync_dynamic_node_with_callbacks(node, callbacks):
         and run_background_task_plan_sync_fn is None
         and index_switch_sync_fn is None
         and preview_data_sync_fn is None
+        and sample_context_data_sync_fn is None
         and parse_property_package_sync_fn is None
         and refresh_property_package_sync_fn is None
         and hide_report_outputs_fn is None
@@ -422,6 +511,11 @@ def _sync_dynamic_node_with_callbacks(node, callbacks):
     if getattr(node, "bl_idname", "") == "AFNodePreviewData" and preview_data_sync_fn is not None:
         try:
             preview_data_sync_fn(node)
+        except Exception:
+            pass
+    if getattr(node, "bl_idname", "") == _SAMPLE_CONTEXT_DYNAMIC_NODE_IDNAME and sample_context_data_sync_fn is not None:
+        try:
+            sample_context_data_sync_fn(node)
         except Exception:
             pass
     if getattr(node, "bl_idname", "") == "AFNodeParsePropertyPackage" and parse_property_package_sync_fn is not None:
@@ -512,7 +606,11 @@ def _sync_all_group_nodes():
 
 
 def queue_sync_all_group_nodes():
+    timer_generation = _TIMER_GENERATION
+
     def _timer():
+        if not _timer_generation_matches(timer_generation):
+            return None
         _sync_all_group_nodes()
         return None
 
@@ -529,7 +627,11 @@ def _iter_af_node_trees():
 
 
 def queue_post_register_sync():
+    timer_generation = _TIMER_GENERATION
+
     def _timer():
+        if not _timer_generation_matches(timer_generation):
+            return None
         if not _runtime_sync_enabled():
             return 0.05
         for node_tree in list(_iter_af_node_trees() or []):
@@ -552,7 +654,11 @@ def _start_group_node_consistency_timer():
     if _GROUP_NODE_CONSISTENCY_TIMER_ACTIVE:
         return
 
+    timer_generation = _TIMER_GENERATION
+
     def _timer():
+        if not _timer_generation_matches(timer_generation):
+            return None
         if not _GROUP_NODE_CONSISTENCY_TIMER_ACTIVE:
             return None
         if not _runtime_sync_enabled():
@@ -593,8 +699,12 @@ def _queue_group_tree_sync(node_tree):
     if _GROUP_TREE_SYNC_TIMER_ACTIVE:
         return
 
+    timer_generation = _TIMER_GENERATION
+
     def _timer():
         global _GROUP_TREE_SYNC_TIMER_ACTIVE
+        if not _timer_generation_matches(timer_generation):
+            return None
         if not _GROUP_TREE_SYNC_RETRY_COUNTS:
             _GROUP_TREE_SYNC_TIMER_ACTIVE = False
             return None
@@ -809,7 +919,9 @@ def _refresh_dynamic_node_dependents(node_tree, *, invalidate_active_runner=True
 
 
 def _refresh_property_data_dependents(node_tree, *, invalidate_active_runner=True):
-    _refresh_dynamic_node_dependents(
+    # Property Data sockets are now synchronized in place and no longer need
+    # the whole-tree dynamic socket pass on every field/mode toggle.
+    _refresh_runtime_data_dependents(
         node_tree,
         invalidate_active_runner=bool(invalidate_active_runner),
     )
@@ -848,8 +960,12 @@ def _queue_tree_reroute_sync(node_tree):
     if _SYNC_TIMER_ACTIVE:
         return
 
+    timer_generation = _TIMER_GENERATION
+
     def _timer():
         global _SYNC_TIMER_ACTIVE
+        if not _timer_generation_matches(timer_generation):
+            return None
         if not _SYNC_RETRY_COUNTS:
             _SYNC_TIMER_ACTIVE = False
             return None
@@ -887,6 +1003,7 @@ class AFNodeTree(bpy.types.NodeTree):
         valid_custom = {
             "AFSocketFlow",
             "AFSocketCollectionList",
+            "AFSocketString",
             "AFSocketObjectList",
             "AFSocketPropertyPackage",
             "AFSocketPropertyDefinition",
@@ -895,8 +1012,16 @@ class AFNodeTree(bpy.types.NodeTree):
             "AFSocketTaskPlan",
             "AFSocketTaskHandle",
             "AFSocketReport",
+            "AFSocketBooleanValue",
+            "AFSocketFloatValue",
+            "AFSocketIntegerValue",
+            "AFSocketVectorValue",
+            "AFSocketRotationValue",
+            "AFSocketMatrixValue",
             "AFSocketDisplayType",
+            "AFSocketObjectInteractionMode",
             "AFSocketRotationMode",
+            "AFSocketViewportShadingMode",
         }
         valid_builtin = {
             "NodeSocketString",
@@ -907,7 +1032,8 @@ class AFNodeTree(bpy.types.NodeTree):
             "NodeSocketRotation",
             "NodeSocketMatrix",
         }
-        return str(socket_type) in valid_custom or str(socket_type) in valid_builtin
+        socket_type = str(socket_type or "")
+        return socket_type in valid_custom or builtin_socket_family_by_idname(socket_type) in valid_builtin
 
     def update(self):
         if not _runtime_sync_enabled():
@@ -926,6 +1052,14 @@ class AFNodeTree(bpy.types.NodeTree):
         except Exception:
             pass
         _sync_dynamic_node_inputs(self)
+        try:
+            from .. import nodes as nodes_module
+
+            apply_group_constraints_fn = getattr(nodes_module, "_apply_group_node_constraints_in_tree", None)
+            if apply_group_constraints_fn is not None:
+                apply_group_constraints_fn(self)
+        except Exception:
+            pass
         _sync_reroute_socket_idnames(self)
         _refresh_link_validity(self)
         _queue_tree_reroute_sync(self)
@@ -948,7 +1082,8 @@ class AFNodeTree(bpy.types.NodeTree):
                 pair_sync_fn(self)
         except Exception:
             pass
-        _sync_dynamic_node_inputs(self)
+        # Group interface edits do not require a full dynamic-node socket pass.
+        # The affected AFNodeGroup instances are handled by the group-tree sync path.
         _sync_reroute_socket_idnames(self)
         _refresh_link_validity(self)
         _queue_tree_reroute_sync(self)
@@ -969,24 +1104,25 @@ class AFNodeTree(bpy.types.NodeTree):
         to_socket_type = _effective_socket_type(to_node, to_socket)
         from_unresolved_reroute = getattr(from_node, "bl_idname", "") == "NodeReroute" and not from_socket_type
         to_unresolved_reroute = getattr(to_node, "bl_idname", "") == "NodeReroute" and not to_socket_type
-        to_virtual_preview = bool(
-            getattr(to_node, "bl_idname", "") == "AFNodePreviewData"
-            and _socket_idname(to_socket) == _PREVIEW_DYNAMIC_SOCKET_IDNAME
-            and bool(getattr(to_socket, "af_is_virtual", False))
-        )
+        to_preview_dynamic = _is_preview_dynamic_socket(to_node, to_socket)
+        to_supported_preview = _preview_dynamic_link_supported(from_socket_type, to_node, to_socket)
+        to_sample_context_dynamic = _is_sample_context_dynamic_socket(to_node, to_socket)
+        to_supported_sample_context = _sample_context_dynamic_link_supported(from_socket_type, to_node, to_socket)
 
         if _AUTO_CAST_LINK_DEPTH <= 0:
             conversion_mode = _link_should_auto_convert(link)
             if conversion_mode:
                 if _insert_auto_cast_node(self, link, conversion_mode):
-                    _sync_dynamic_node_inputs(self)
+                    _sync_dynamic_node_targets(self, [from_node, to_node], include_pair_sync=True)
                     _sync_reroute_socket_idnames(self)
                     _refresh_link_validity(self)
                     _queue_tree_reroute_sync(self)
                     _queue_group_tree_sync(self)
                 return
 
-        if to_virtual_preview and from_socket_type in _PREVIEW_DYNAMIC_SUPPORTED_SOCKET_TYPES:
+        if to_supported_preview:
+            is_supported = True
+        elif to_supported_sample_context:
             is_supported = True
         elif to_unresolved_reroute and from_socket_type:
             is_supported = True
@@ -1000,12 +1136,23 @@ class AFNodeTree(bpy.types.NodeTree):
             except Exception:
                 pass
             _tag_node_editor_redraw(self.name)
-            _sync_dynamic_node_inputs(self)
+            _sync_dynamic_node_targets(self, [from_node, to_node], include_pair_sync=True)
             _sync_reroute_socket_idnames(self)
             _queue_tree_reroute_sync(self)
             _queue_group_tree_sync(self)
             return
         _mark_link_validity(link, is_supported)
+        if getattr(to_node, "bl_idname", "") == "AFNodePreviewData":
+            try:
+                from .. import nodes as nodes_module
+
+                schedule_preview_refresh = getattr(nodes_module, "_schedule_preview_data_ui_refresh", None)
+                if callable(schedule_preview_refresh):
+                    schedule_preview_refresh()
+            except Exception:
+                pass
+            if to_preview_dynamic:
+                _touch_tree_runtime_revision(self)
         _tag_node_editor_redraw(self.name)
 
         # Keep immediate behavior for fan-out / branch reroute creation.
@@ -1021,15 +1168,7 @@ class AFNodeTree(bpy.types.NodeTree):
                     from_node.socket_idname = to_socket_type
             except Exception:
                 pass
-        try:
-            from .. import nodes as nodes_module
-
-            pair_sync_fn = getattr(nodes_module, "_sync_paired_flow_nodes", None)
-            if pair_sync_fn is not None:
-                pair_sync_fn(self)
-        except Exception:
-            pass
-        _sync_dynamic_node_inputs(self)
+        _sync_dynamic_node_targets(self, [from_node, to_node], include_pair_sync=True)
         _sync_reroute_socket_idnames(self)
         _refresh_link_validity(self)
         # A few delayed retries handle single-line insertion timing.
@@ -1042,6 +1181,7 @@ CLASSES = (
 
 
 def register():
+    _advance_timer_generation()
     for cls in CLASSES:
         safe_register_class(cls)
     if _sync_all_group_nodes_after_load not in bpy.app.handlers.load_post:
@@ -1051,6 +1191,7 @@ def register():
 
 def unregister():
     global _SYNC_TIMER_ACTIVE, _GROUP_TREE_SYNC_TIMER_ACTIVE, _GROUP_NODE_CONSISTENCY_TIMER_ACTIVE
+    _advance_timer_generation()
     _SYNC_RETRY_COUNTS.clear()
     _GROUP_TREE_SYNC_RETRY_COUNTS.clear()
     _SYNC_TIMER_ACTIVE = False

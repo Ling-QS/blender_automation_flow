@@ -70,12 +70,15 @@ PREVIEW_DATA_MODE_ITEMS = (
     ("ROTATION", "Rotation", "Preview a Rotation value"),
     ("MATRIX", "Matrix", "Preview a Matrix value"),
     ("DISPLAY_TYPE", "Display Type", "Preview a Display Type value"),
+    ("OBJECT_INTERACTION_MODE", "Object Interaction Mode", "Preview an Object Interaction Mode value"),
     ("ROTATION_MODE", "Rotation Mode", "Preview a Rotation Mode value"),
+    ("VIEWPORT_SHADING_MODE", "Viewport Shading Mode", "Preview a Viewport Shading Mode value"),
     ("PROPERTY_DEFINITION", "Prop Def", "Preview a Prop Def"),
     ("PROPERTY_ASSIGNMENT", "Prop Assign", "Preview a Prop Assign"),
     ("PROPERTY_PACKAGE", "Prop Pack", "Preview a Prop Pack"),
     ("TASK_REF", "Task Ref", "Preview a Task Ref"),
     ("TASK_PLAN", "Task Plan", "Preview a Task Plan"),
+    ("TASK_HANDLE", "Task Handle", "Preview a Task Handle"),
     ("REPORT", "Report", "Preview a Report payload"),
 )
 
@@ -185,7 +188,7 @@ CONTEXT_REDUCE_OUTPUT_KEY_BY_TYPE = {
 PREVIEW_DATA_MODE_SPECS = {
     "OBJECT": ("AFSocketObjectList", "Object", "object_list"),
     "OBJECT_LIST": ("AFSocketObjectList", "Object List", "object_list"),
-    "STRING": ("NodeSocketString", "String", "string_value"),
+    "STRING": ("AFSocketString", "String", "string_value"),
     "BOOLEAN": ("NodeSocketBool", "Boolean", "bool_value"),
     "INTEGER": ("NodeSocketInt", "Integer", "int_value"),
     "FLOAT": ("NodeSocketFloat", "Float", "float_value"),
@@ -193,12 +196,23 @@ PREVIEW_DATA_MODE_SPECS = {
     "ROTATION": ("NodeSocketRotation", "Rotation", "rotation_value"),
     "MATRIX": ("NodeSocketMatrix", "Matrix", "matrix_value"),
     "DISPLAY_TYPE": ("AFSocketDisplayType", "Display Type", "display_type_value"),
+    "OBJECT_INTERACTION_MODE": (
+        "AFSocketObjectInteractionMode",
+        "Object Interaction Mode",
+        "object_interaction_mode_value",
+    ),
     "ROTATION_MODE": ("AFSocketRotationMode", "Rotation Mode", "rotation_mode_value"),
+    "VIEWPORT_SHADING_MODE": (
+        "AFSocketViewportShadingMode",
+        "Viewport Shading Mode",
+        "viewport_shading_mode_value",
+    ),
     "PROPERTY_DEFINITION": ("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME, "property_definition"),
     "PROPERTY_ASSIGNMENT": ("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME, "property_assignment"),
     "PROPERTY_PACKAGE": ("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME, "property_package"),
     "TASK_REF": ("AFSocketTaskRef", "Task Ref", "task_ref"),
     "TASK_PLAN": ("AFSocketTaskPlan", "Task Plan", "task_plan"),
+    "TASK_HANDLE": ("AFSocketTaskHandle", "Task Handle", "task_handle"),
     "REPORT": ("AFSocketReport", "Report", "report"),
 }
 
@@ -207,13 +221,19 @@ PREVIEW_DATA_MODE_BY_SOCKET_IDNAME = {
 }
 PREVIEW_DATA_MODE_BY_SOCKET_IDNAME.update(
     {
+        "NodeSocketString": "STRING",
         "AFSocketString": "STRING",
         "AFSocketBooleanValue": "BOOLEAN",
         "AFSocketDisplayType": "DISPLAY_TYPE",
         "AFSocketIntegerValue": "INTEGER",
         "AFSocketFloatValue": "FLOAT",
+        "AFSocketObjectInteractionMode": "OBJECT_INTERACTION_MODE",
+        "AFSocketMatrixValue": "MATRIX",
+        "AFSocketRotationValue": "ROTATION",
         "AFSocketRotationMode": "ROTATION_MODE",
+        "AFSocketTaskHandle": "TASK_HANDLE",
         "AFSocketVectorValue": "VECTOR",
+        "AFSocketViewportShadingMode": "VIEWPORT_SHADING_MODE",
     }
 )
 

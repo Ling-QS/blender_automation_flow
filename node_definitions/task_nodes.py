@@ -278,7 +278,6 @@ def build_task_node_classes(
             scope_row = layout.row(align=True)
             scope_row.prop(self, "dependency_scope", expand=True)
             layout.prop(self, "dependency_strategy", text="")
-            layout.separator()
             layout.prop(self, "include_self")
 
     class AFNodeRunTaskPlan(AFBaseNode, bpy.types.Node):

@@ -236,6 +236,7 @@ class FlowRunner(
         self._active_waiting_node_key = None
         self._geometry_attribute_cache = {}
         self._object_lookup_cache = {}
+        self._context_reduce_cache = {}
         self._property_context_dependency_cache = {}
         self._runtime_matrix_cache = {}
         self._runtime_rotation_cache = {}
@@ -249,13 +250,32 @@ class FlowRunner(
         self._status_report_cache_dirty = False
         self._flow_toggle_cache_payload = None
         self._flow_toggle_cache_dirty = False
+        self._node_identity_cache = {}
+        self._group_path_key_cache = {}
+        self._node_output_key_cache = {}
+        self._legacy_node_output_key_cache = {}
+        self._socket_output_keys_cache = {}
+        self._socket_output_key_support_cache = {}
+        self._node_output_key_support_cache = {}
+        self._node_input_socket_cache = {}
+        self._last_property_context_key_source = None
+        self._last_property_context_key_value = ""
+        self._last_node_identity_source = None
+        self._last_node_identity_value = ""
+        self._last_group_path_signature_source = None
+        self._last_group_path_signature_value = ()
+        self._last_group_path_key_source = None
+        self._last_group_path_key_value = ""
+        self._last_socket_output_keys_source = None
+        self._last_socket_output_keys_value = ()
+        self._boolean_toggle_run_states = {}
         self._preview_data_node_read_only = False
 
     def _evaluate_data_node(self, node):
-        node_identity = self._node_identity(node)
-        if node_identity in self.data_eval_stack:
+        data_eval_token = self._data_eval_token(node)
+        if data_eval_token in self.data_eval_stack:
             raise FlowExecutionError("AF_E019", f"Data node cycle detected at '{node.name}'", node.name)
-        self.data_eval_stack.add(node_identity)
+        self.data_eval_stack.add(data_eval_token)
         try:
             node_type = node.bl_idname
             if getattr(node, "mute", False):
@@ -273,7 +293,7 @@ class FlowRunner(
 
             raise FlowExecutionError("AF_E009", f"Unsupported data node type: {node_type}", node.name)
         finally:
-            self.data_eval_stack.discard(node_identity)
+            self.data_eval_stack.discard(data_eval_token)
 
     def tick(self, max_immediate_steps=1):
         self._begin_auto_follow_tick_highlight()

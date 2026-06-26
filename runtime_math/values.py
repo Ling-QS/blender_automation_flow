@@ -142,7 +142,16 @@ def _payload_to_matrix(value):
         rows = value.get("rows", [])
         matrix = Matrix(tuple(tuple(float(component) for component in list(row)[:4]) for row in list(rows)[:4]))
     elif isinstance(value, (list, tuple)):
-        matrix = Matrix(value)
+        components = list(value)
+        if len(components) == 16:
+            matrix = Matrix(
+                tuple(
+                    tuple(float(components[row_index * 4 + column_index]) for column_index in range(4))
+                    for row_index in range(4)
+                )
+            )
+        else:
+            matrix = Matrix(value)
     else:
         matrix = Matrix.Identity(4)
     if len(matrix.col) == 3:

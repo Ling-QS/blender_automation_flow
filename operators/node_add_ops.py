@@ -9,6 +9,7 @@ from .editor_utils import (
     _tag_flow_node_editor_redraw,
 )
 from .group_assets import _ensure_group_asset_tree
+from .group_interface import _resolved_group_interface_socket_type
 from .group_helpers import (
     GROUP_FORBIDDEN_NODE_TYPES,
     _clone_node_to_tree,
@@ -217,7 +218,11 @@ class AF_OT_CreateGroupFromSelection(bpy.types.Operator):
                 for link in inbound_links:
                     socket_type = str(getattr(link.to_socket, "bl_idname", "") or "")
                     name = _unique_interface_name(link.to_socket.name, input_names)
-                    item = group_tree.interface.new_socket(name, socket_type=socket_type, in_out="INPUT")
+                    item = group_tree.interface.new_socket(
+                        name,
+                        socket_type=_resolved_group_interface_socket_type(socket_type),
+                        in_out="INPUT",
+                    )
                     inbound_interface_map[link] = str(item.identifier)
                 for link in outbound_links:
                     source_key = (int(link.from_node.as_pointer()), str(link.from_socket.name), str(getattr(link.from_socket, "bl_idname", "")))
@@ -225,7 +230,11 @@ class AF_OT_CreateGroupFromSelection(bpy.types.Operator):
                         continue
                     socket_type = str(getattr(link.from_socket, "bl_idname", "") or "")
                     name = _unique_interface_name(link.from_socket.name, output_names)
-                    item = group_tree.interface.new_socket(name, socket_type=socket_type, in_out="OUTPUT")
+                    item = group_tree.interface.new_socket(
+                        name,
+                        socket_type=_resolved_group_interface_socket_type(socket_type),
+                        in_out="OUTPUT",
+                    )
                     outbound_interface_map[source_key] = str(item.identifier)
             except Exception as exc:
                 bpy.data.node_groups.remove(group_tree)

@@ -26,6 +26,7 @@ from ...runtime_persistence.serialization import (
 )
 from ...runtime_task_ref.helpers import _frame_range_from_task_ref
 from ...runtime_task_ref.refs import (
+    _invalid_task_ref_issue,
     _raise_if_invalid_task_ref,
     _rehydrate_task_ref_object_references,
     _validate_task_ref_object_targets,
@@ -266,9 +267,14 @@ class RuntimeTaskHandleMixin:
         }
         if isinstance(task_ref, dict):
             invalid_report["task_kind"] = str(task_ref.get("task_kind", "") or "")
-        if task_ref is None:
-            invalid_report["error_code"] = "AF_E011"
-            invalid_report["error_message"] = "Task Ref input is not linked"
+        if not self._is_valid_reference_payload("task_ref", task_ref):
+            invalid_issue = _invalid_task_ref_issue(task_ref) if isinstance(task_ref, dict) else None
+            if invalid_issue is None:
+                invalid_report["error_code"] = "AF_E011"
+                invalid_report["error_message"] = "Task Ref input is not linked"
+            else:
+                invalid_report["error_code"] = str(invalid_issue.get("code", "AF_E011") or "AF_E011")
+                invalid_report["error_message"] = str(invalid_issue.get("message", "Task Ref is invalid") or "Task Ref is invalid")
             return empty_object_list, int(fallback_start), int(fallback_end), "INVALID", invalid_report
 
         try:

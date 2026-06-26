@@ -141,7 +141,7 @@ class RuntimeSceneDataMixin:
             return True
 
         if node_type == "AFNodeObjectInteractionState":
-            target_mode = str(getattr(node, "target_interaction_mode", "OBJECT") or "OBJECT")
+            target_mode = self._input_object_interaction_mode(node, "Mode", "OBJECT")
             self._set_output_socket_value_compat(
                 node,
                 "Active",
@@ -151,7 +151,7 @@ class RuntimeSceneDataMixin:
             return True
 
         if node_type == "AFNodeViewportShadingState":
-            target_mode = str(getattr(node, "target_shading_mode", "SOLID") or "SOLID")
+            target_mode = self._input_viewport_shading_mode(node, "Shading", "SOLID")
             self._set_output_socket_value_compat(
                 node,
                 "Active",
@@ -180,6 +180,25 @@ class RuntimeSceneDataMixin:
             self._set_output_socket_value(node, "State", current_state)
             if not bool(getattr(self, "_preview_data_node_read_only", False)):
                 self._write_boolean_state(node, "BOOLEAN_LATCH_STATE", current_state)
+            return True
+
+        if node_type == "AFNodeBooleanToggle":
+            preview_read_only = bool(getattr(self, "_preview_data_node_read_only", False))
+            active_group_path = list(getattr(self, "current_group_path", []))
+            run_key = self._boolean_state_cache_key_for_node(node, "BOOLEAN_TOGGLE_STATE", active_group_path)
+            if not preview_read_only and run_key in getattr(self, "_boolean_toggle_run_states", {}):
+                current_state = bool(self._boolean_toggle_run_states.get(run_key))
+            else:
+                current_state = bool(self._read_boolean_toggle_state(node, active_group_path))
+            toggle_signal = bool(self._input_bool(node, "Value", False))
+            if toggle_signal and not preview_read_only and run_key not in self._boolean_toggle_run_states:
+                current_state = not current_state
+                self._boolean_toggle_run_states[run_key] = current_state
+                if not self._is_dry_run_mode() and not self._is_flow_test_mode():
+                    self._write_boolean_toggle_state(node, current_state, active_group_path)
+            elif toggle_signal and preview_read_only:
+                current_state = not current_state
+            self._set_output_socket_value(node, "State", current_state)
             return True
 
         if node_type == "AFNodeSceneObjectList":

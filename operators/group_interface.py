@@ -10,7 +10,7 @@ from .group_helpers import _group_interface_context, _unique_interface_name
 GROUP_INTERFACE_SOCKET_TYPE_ITEMS = (
     ("AFSocketFlow", "Flow", "SORTTIME"),
     ("AFSocketCollectionList", "Collection List", "OUTLINER_COLLECTION"),
-    ("NodeSocketString", "String", "SORTALPHA"),
+    ("AFSocketString", "String", "SORTALPHA"),
     ("AFSocketObjectList", "Object List", "OUTLINER_OB_GROUP_INSTANCE"),
     ("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME, "NODE_COMPOSITING"),
     ("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME, "PREFERENCES"),
@@ -25,13 +25,28 @@ GROUP_INTERFACE_SOCKET_TYPE_ITEMS = (
     ("NodeSocketRotation", "Rotation", "DRIVER_ROTATIONAL_DIFFERENCE"),
     ("NodeSocketMatrix", "Matrix", "SNAP_VOLUME"),
     ("AFSocketDisplayType", "Display Type", "DOWNARROW_HLT"),
+    ("AFSocketObjectInteractionMode", "Object Interaction Mode", "DOWNARROW_HLT"),
     ("AFSocketRotationMode", "Rotation Mode", "DOWNARROW_HLT"),
+    ("AFSocketViewportShadingMode", "Viewport Shading Mode", "DOWNARROW_HLT"),
     ("AFSocketReport", "Report", "TEXT"),
 )
 
 GROUP_INTERFACE_SOCKET_LABEL_BY_TYPE = {
     socket_type: label for socket_type, label, _icon in GROUP_INTERFACE_SOCKET_TYPE_ITEMS
 }
+
+_GROUP_INTERFACE_SOCKET_TYPE_ALIASES = {
+    "AFSocketString": "NodeSocketString",
+}
+
+for socket_type, label in tuple(GROUP_INTERFACE_SOCKET_LABEL_BY_TYPE.items()):
+    resolved_socket_type = str(_GROUP_INTERFACE_SOCKET_TYPE_ALIASES.get(socket_type, socket_type) or socket_type)
+    GROUP_INTERFACE_SOCKET_LABEL_BY_TYPE.setdefault(resolved_socket_type, label)
+
+
+def _resolved_group_interface_socket_type(socket_type):
+    socket_type = str(socket_type or "").strip()
+    return str(_GROUP_INTERFACE_SOCKET_TYPE_ALIASES.get(socket_type, socket_type) or socket_type)
 
 
 def _group_interface_socket_default_name(socket_type):
@@ -78,7 +93,11 @@ class AF_OT_AddGroupInterfaceSocket(bpy.types.Operator):
         socket_name = _unique_interface_name(base_name, used_names)
 
         try:
-            item = interface.new_socket(socket_name, socket_type=socket_type, in_out=in_out)
+            item = interface.new_socket(
+                socket_name,
+                socket_type=_resolved_group_interface_socket_type(socket_type),
+                in_out=in_out,
+            )
         except Exception as exc:
             self.report({"ERROR"}, f"Failed to add Group Interface socket: {exc}")
             return {"CANCELLED"}
@@ -128,7 +147,7 @@ class AF_OT_SetGroupInterfaceSocketType(bpy.types.Operator):
             return {"CANCELLED"}
 
         try:
-            active_item.socket_type = socket_type
+            active_item.socket_type = _resolved_group_interface_socket_type(socket_type)
         except Exception as exc:
             self.report({"ERROR"}, f"Failed to set Group Interface socket type: {exc}")
             return {"CANCELLED"}

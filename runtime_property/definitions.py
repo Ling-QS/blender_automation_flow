@@ -166,6 +166,10 @@ def _make_empty_property_definition(source_node=""):
     return _make_composite_property_definition(source_node, [], metadata={"entry_count": 0, "count": 0})
 
 
+def _make_empty_property_assignment(source_node=""):
+    return _make_composite_property_assignment(source_node, [], metadata={"entry_count": 0, "count": 0})
+
+
 def _property_definition_signature(property_definition):
     property_definition = _sanitize_reusable_property_definition(property_definition, str(property_definition.get("source_node", "") or "Definition"))
     definition_kind = str(property_definition.get("definition_kind", "") or "")

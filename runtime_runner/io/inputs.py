@@ -165,5 +165,23 @@ class RuntimeInputsMixin:
             return str(linked or fallback)
         return str(getattr(node, "target_rotation_mode", fallback) or fallback)
 
+    def _input_object_interaction_mode(self, node, input_name, fallback="OBJECT"):
+        linked = self._get_linked_output(node, input_name, "object_interaction_mode_value")
+        if linked is not None:
+            return str(linked or fallback)
+        socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)(input_name)
+        if socket is not None:
+            return str(getattr(socket, "default_value", fallback) or fallback)
+        return str(getattr(node, "target_interaction_mode", fallback) or fallback)
+
+    def _input_viewport_shading_mode(self, node, input_name, fallback="SOLID"):
+        linked = self._get_linked_output(node, input_name, "viewport_shading_mode_value")
+        if linked is not None:
+            return str(linked or fallback)
+        socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)(input_name)
+        if socket is not None:
+            return str(getattr(socket, "default_value", fallback) or fallback)
+        return str(getattr(node, "target_shading_mode", fallback) or fallback)
+
 
 __all__ = ["RuntimeInputsMixin"]

@@ -223,8 +223,32 @@ class RuntimeNodePrecheckMixin:
             definition_socket = self._input_socket(node, PROPERTY_DEFINITION_SOCKET_NAME)
             has_definition = definition_socket is not None and _find_single_from_input_socket(definition_socket)[0] is not None
             filter_mode = str(getattr(node, "filter_mode", "KEEP_MATCHED") or "KEEP_MATCHED")
-            if not has_object_list and not has_definition and filter_mode != "REMOVE_MATCHED":
+            if not has_object_list and not has_definition and filter_mode == "REMOVE_MATCHED":
+                return issues
+            if not has_object_list and not has_definition and filter_mode != "KEEP_MATCHED":
                 issues.append(_make_issue("AF_E011", "Object List or Property Definition input must be linked", node.name))
+                return issues
+            if filter_mode in {"KEEP_MATCHED", "REMOVE_MATCHED"}:
+                object_list = self._get_linked_output(node, "Object List", "object_list") if has_object_list else None
+                property_definition = (
+                    self._get_linked_output(node, PROPERTY_DEFINITION_SOCKET_NAME, "property_definition")
+                    if has_definition
+                    else None
+                )
+                has_effective_object_filter = self._has_effective_output_content("object_list", object_list, node)
+                has_effective_definition_filter = self._has_effective_output_content(
+                    "property_definition",
+                    property_definition,
+                    node,
+                )
+                if not has_effective_object_filter and not has_effective_definition_filter:
+                    issues.append(
+                        _make_issue(
+                            "AF_E011",
+                            "Object List or Property Definition must provide an effective filter",
+                            node.name,
+                        )
+                    )
         return issues
 
 

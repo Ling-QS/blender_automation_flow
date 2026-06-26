@@ -6,6 +6,7 @@ FLOW_MENU_REGULAR_NODES = (
     ("AFNodeWaitForTask", "Wait For Task"),
     ("AFNodeDelayWait", "Delay Wait"),
     ("AFNodeReloadAfterTask", "Reload After Task"),
+    ("AFNodeFlowTrigger", "Flow Trigger"),
     ("AFNodeFlowToggle", "FlowToggle"),
     ("AFNodeTaskStatusOverride", "Task Status Override"),
 )
@@ -26,6 +27,7 @@ FLOW_MENU_TRIGGER_NODES = (
     ("AFNodeViewportShadingState", "Viewport Shading State"),
     ("AFNodeBooleanEdge", "Boolean Edge"),
     ("AFNodeBooleanLatch", "Boolean Latch"),
+    ("AFNodeBooleanToggle", "Boolean Toggle"),
 )
 
 FLOW_PROCESS_MENU_LABEL = "Process"
@@ -34,7 +36,8 @@ FLOW_TRIGGER_MENU_LABEL = "Trigger"
 
 PROPERTY_CONTEXT_DATA_MENU_NODES = (
     ("AFNodePropertyContext", "Prop Context"),
-    ("AFNodeSampleObjectIndex", "Sample Object Index"),
+    ("AFNodeExtractPropertyAssignments", "Extract Prop Assigns"),
+    ("AFNodeSampleContextData", "Sample Context Data"),
     ("AFNodeReduceContextValue", "Reduce Context Value"),
     ("AFNodeReadGeometryAttribute", "Read Geometry Attribute"),
     ("AFNodeSetGeometryAttribute", "Set Geometry Attribute"),
@@ -120,7 +123,6 @@ NODE_MENU_GROUPS = (
             ("AFNodeIntegerMath", "Integer Math"),
             ("AFNodeBooleanMath", "Boolean Math"),
             ("AFNodeCompare", "Compare"),
-            ("AFNodeStringCompare", "String Compare"),
             ("AFNodeClamp", "Clamp"),
             ("AFNodeMapRange", "Map Range"),
             ("AFNodeSmoothstep", "Smoothstep"),
@@ -150,6 +152,7 @@ NODE_MENU_GROUPS = (
     (
         "Rotation",
         (
+            ("AFNodeRotateVector", "Rotate Vector"),
             ("AFNodeEulerToRotation", "Euler to Rotation"),
             ("AFNodeQuaternionToRotation", "Quaternion to Rotation"),
             ("AFNodeAxisAngleToRotation", "Axis Angle to Rotation"),

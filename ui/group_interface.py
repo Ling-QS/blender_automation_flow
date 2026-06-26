@@ -3,6 +3,26 @@ from bpy.app.translations import pgettext_iface as iface_
 
 from ..i18n import af_iface
 from ..operators import GROUP_INTERFACE_SOCKET_LABEL_BY_TYPE, GROUP_INTERFACE_SOCKET_TYPE_ITEMS
+from ..runtime_core.constants import builtin_socket_family_by_idname, string_socket_family_by_idname
+
+_GROUP_INTERFACE_ENUM_SOCKET_TYPES = {
+    "AFSocketDisplayType",
+    "AFSocketObjectInteractionMode",
+    "AFSocketRotationMode",
+    "AFSocketViewportShadingMode",
+}
+_GROUP_INTERFACE_COMPLEX_SOCKET_TYPES = {
+    "AFSocketFlow",
+    "AFSocketCollectionList",
+    "AFSocketObjectList",
+    "AFSocketPropertyPackage",
+    "AFSocketPropertyDefinition",
+    "AFSocketPropertyAssignment",
+    "AFSocketTaskRef",
+    "AFSocketTaskPlan",
+    "AFSocketTaskHandle",
+    "AFSocketReport",
+}
 
 
 def _is_group_editing(space):
@@ -20,8 +40,58 @@ def _active_group_interface_item(tree):
 
 def _group_interface_socket_type_label(socket_type):
     socket_type = str(socket_type or "")
-    label = str(GROUP_INTERFACE_SOCKET_LABEL_BY_TYPE.get(socket_type, socket_type or iface_("Socket")))
+    display_type = builtin_socket_family_by_idname(socket_type) or string_socket_family_by_idname(socket_type) or socket_type
+    label = str(GROUP_INTERFACE_SOCKET_LABEL_BY_TYPE.get(display_type, display_type or iface_("Socket")))
     return af_iface(label)
+
+
+def _group_interface_item_socket_type(item):
+    return str(
+        getattr(item, "bl_socket_idname", "")
+        or getattr(item, "socket_type", "")
+        or ""
+    )
+
+
+def _group_interface_item_has_prop(item, prop_name):
+    try:
+        return item.bl_rna.properties.get(prop_name) is not None
+    except Exception:
+        return False
+
+
+def _group_interface_input_supports_default(item_socket_type):
+    item_socket_type = str(item_socket_type or "")
+    if item_socket_type in _GROUP_INTERFACE_COMPLEX_SOCKET_TYPES:
+        return False
+    if item_socket_type in _GROUP_INTERFACE_ENUM_SOCKET_TYPES:
+        return True
+    family = builtin_socket_family_by_idname(item_socket_type) or string_socket_family_by_idname(item_socket_type)
+    return family in {
+        "NodeSocketBool",
+        "NodeSocketInt",
+        "NodeSocketFloat",
+        "NodeSocketVector",
+        "NodeSocketString",
+        "NodeSocketRotation",
+    }
+
+
+def _group_interface_input_supports_hide_value(item_socket_type):
+    item_socket_type = str(item_socket_type or "")
+    if item_socket_type in _GROUP_INTERFACE_COMPLEX_SOCKET_TYPES:
+        return False
+    if item_socket_type in _GROUP_INTERFACE_ENUM_SOCKET_TYPES:
+        return True
+    family = builtin_socket_family_by_idname(item_socket_type) or string_socket_family_by_idname(item_socket_type)
+    return family in {
+        "NodeSocketBool",
+        "NodeSocketInt",
+        "NodeSocketFloat",
+        "NodeSocketVector",
+        "NodeSocketString",
+        "NodeSocketRotation",
+    }
 
 
 def _draw_group_interface_item_details(layout, item):
@@ -51,6 +121,32 @@ def _draw_group_interface_item_details(layout, item):
         )
     if bool(getattr(item, "is_panel_toggle", False)):
         col.label(text=iface_("Panel Toggle"))
+
+    if _group_interface_item_has_prop(item, "optional_label"):
+        col.prop(item, "optional_label")
+
+    if str(getattr(item, "in_out", "") or "") != "INPUT":
+        return
+
+    item_socket_type = _group_interface_item_socket_type(item)
+    socket_family = builtin_socket_family_by_idname(item_socket_type)
+    string_family = string_socket_family_by_idname(item_socket_type)
+
+    if _group_interface_item_has_prop(item, "default_value") and _group_interface_input_supports_default(item_socket_type):
+        col.prop(item, "default_value", text=iface_("Default"))
+    if _group_interface_item_has_prop(item, "hide_value") and _group_interface_input_supports_hide_value(item_socket_type):
+        col.prop(item, "hide_value")
+
+    if socket_family in {"NodeSocketFloat", "NodeSocketInt", "NodeSocketVector"}:
+        if _group_interface_item_has_prop(item, "min_value"):
+            col.prop(item, "min_value", text=iface_("Min"))
+        if _group_interface_item_has_prop(item, "max_value"):
+            col.prop(item, "max_value", text=iface_("Max"))
+    if socket_family in {"NodeSocketFloat", "NodeSocketInt", "NodeSocketVector"} or string_family == "NodeSocketString":
+        if _group_interface_item_has_prop(item, "subtype"):
+            col.prop(item, "subtype")
+    if socket_family == "NodeSocketVector" and _group_interface_item_has_prop(item, "dimensions"):
+        col.prop(item, "dimensions")
 
 
 class AF_MT_GroupInterfaceAddInputSocket(bpy.types.Menu):

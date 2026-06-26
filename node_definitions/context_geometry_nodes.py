@@ -1,6 +1,11 @@
 import bpy
 from bpy.app.translations import pgettext_iface as iface_
 
+from ..node_system.socket_aliases import (
+    PROPERTY_ASSIGNMENT_SOCKET_NAME,
+    PROPERTY_PACKAGE_SOCKET_NAME,
+)
+
 
 def build_context_geometry_node_classes(
     *,
@@ -13,66 +18,113 @@ def build_context_geometry_node_classes(
     GEOMETRY_ATTRIBUTE_VALUE_TYPE_ITEMS,
     SAMPLE_OBJECT_INDEX_MODE_ITEMS,
     SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE,
+    PREVIEW_DATA_VIRTUAL_LABEL,
+    _find_single_from_input_socket,
     _hide_default_auxiliary_outputs,
-    _rebuild_sockets,
     _set_default_node_width,
     _set_node_color,
     _socket_signature,
+    _sync_node_sockets_in_place,
 ):
-    sample_object_index_sync_guard = set()
+    sample_context_data_sync_guard = set()
     context_reduce_sync_guard = set()
     set_geometry_attribute_sync_guard = set()
     publish_geometry_attribute_sync_guard = set()
-
-    def _sample_object_index_socket_idname_for_mode(mode):
-        return SAMPLE_OBJECT_INDEX_SOCKET_IDNAME_BY_MODE.get(str(mode), "NodeSocketFloat")
 
     def _context_reduce_socket_idname_for_type(value_type):
         return CONTEXT_REDUCE_SOCKET_IDNAME_BY_TYPE.get(str(value_type), "NodeSocketFloat")
 
     def _sync_property_context_sockets(node):
-        index_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Object Index")
-        if index_socket is None:
-            return
-        try:
-            index_socket.hide_value = True
-        except Exception:
-            pass
+        _hide_default_auxiliary_outputs(node)
 
-    def _sync_sample_object_index_sockets(node):
+    def _sample_context_data_real_inputs(node):
+        return [
+            socket
+            for socket in getattr(node, "inputs", [])
+            if str(getattr(socket, "bl_idname", "") or "") == "AFSocketPreviewData"
+            and not bool(getattr(socket, "af_is_virtual", False))
+        ]
+
+    def _sample_context_data_unique_names(source_names):
+        counts = {}
+        unique_names = []
+        reserved_names = {"Object List", "Object Index", "Report"}
+        for raw_name in list(source_names or []):
+            base_name = str(raw_name or "").strip() or "Value"
+            suffix = int(counts.get(base_name, 0) or 0)
+            while True:
+                suffix += 1
+                candidate = base_name if suffix == 1 else f"{base_name} {suffix}"
+                if candidate not in reserved_names:
+                    break
+            counts[base_name] = int(suffix)
+            reserved_names.add(candidate)
+            unique_names.append(candidate)
+        return tuple(unique_names)
+
+    def _sync_sample_context_data_sockets(node):
         node_key = int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
-        if node_key in sample_object_index_sync_guard:
+        if node_key in sample_context_data_sync_guard:
             return
-        sample_object_index_sync_guard.add(node_key)
+        sample_context_data_sync_guard.add(node_key)
         try:
-            value_socket_idname = _sample_object_index_socket_idname_for_mode(getattr(node, "mode", "FLOAT"))
-            input_specs = (
+            source_entries = []
+            for socket in list(getattr(node, "inputs", []) or []):
+                if str(getattr(socket, "bl_idname", "") or "") != "AFSocketPreviewData":
+                    continue
+                if bool(getattr(socket, "af_is_virtual", False)) and not bool(getattr(socket, "is_linked", False)):
+                    continue
+                from_node, from_socket = _find_single_from_input_socket(socket)
+                if from_node is None or from_socket is None:
+                    continue
+                source_entries.append(
+                    (
+                        str(getattr(from_socket, "bl_idname", "") or ""),
+                        str(getattr(from_socket, "name", "") or ""),
+                    )
+                )
+
+            unique_names = _sample_context_data_unique_names(entry[1] for entry in source_entries)
+            input_specs = [
                 ("AFSocketObjectList", "Object List"),
-                (value_socket_idname, "Value"),
                 ("NodeSocketInt", "Object Index"),
-            )
-            output_specs = (
-                (value_socket_idname, "Value"),
-            )
-            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
-            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
-            if input_signature == input_specs and output_signature == output_specs:
-                value_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Value")
-                if value_socket is not None:
-                    try:
-                        value_socket.hide_value = True
-                    except Exception:
-                        pass
-                return
-            _rebuild_sockets(node, input_specs, output_specs)
-            value_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Value")
-            if value_socket is not None:
+            ]
+            output_specs = []
+            for index, (socket_idname, _raw_name) in enumerate(source_entries):
+                socket_name = unique_names[index]
+                input_specs.append(("AFSocketPreviewData", socket_name))
+                output_specs.append((socket_idname, socket_name))
+            input_specs.append(("AFSocketPreviewData", PREVIEW_DATA_VIRTUAL_LABEL))
+            output_specs.append(("AFSocketReport", "Report"))
+            _sync_node_sockets_in_place(node, tuple(input_specs), tuple(output_specs))
+
+            dynamic_inputs = [
+                socket
+                for socket in getattr(node, "inputs", [])
+                if str(getattr(socket, "bl_idname", "") or "") == "AFSocketPreviewData"
+            ]
+            for index, socket in enumerate(dynamic_inputs):
+                is_virtual = index == len(dynamic_inputs) - 1
                 try:
-                    value_socket.hide_value = True
+                    socket.af_is_virtual = bool(is_virtual)
                 except Exception:
                     pass
+                target_name = PREVIEW_DATA_VIRTUAL_LABEL if is_virtual else unique_names[index]
+                if str(getattr(socket, "name", "") or "") != target_name:
+                    try:
+                        socket.name = target_name
+                    except Exception:
+                        pass
+
+            index_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Object Index")
+            if index_socket is not None and hasattr(index_socket, "default_value"):
+                try:
+                    index_socket.default_value = int(getattr(index_socket, "default_value", 0) or 0)
+                except Exception:
+                    pass
+            _hide_default_auxiliary_outputs(node)
         finally:
-            sample_object_index_sync_guard.discard(node_key)
+            sample_context_data_sync_guard.discard(node_key)
 
     def _sync_context_reduce_value_sockets(node):
         node_key = int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
@@ -90,18 +142,7 @@ def build_context_geometry_node_classes(
                 ("NodeSocketInt", "Object Index"),
                 ("AFSocketReport", "Report"),
             )
-            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
-            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
-            if input_signature == input_specs and output_signature == output_specs:
-                value_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Value")
-                if value_socket is not None:
-                    try:
-                        value_socket.hide_value = True
-                    except Exception:
-                        pass
-                _hide_default_auxiliary_outputs(node)
-                return
-            _rebuild_sockets(node, input_specs, output_specs)
+            _sync_node_sockets_in_place(node, input_specs, output_specs)
             value_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Value")
             if value_socket is not None:
                 try:
@@ -123,10 +164,7 @@ def build_context_geometry_node_classes(
             (output_socket_idname, "Value"),
             ("AFSocketReport", "Report"),
         )
-        input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
-        output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
-        if input_signature != input_specs or output_signature != output_specs:
-            _rebuild_sockets(node, input_specs, output_specs)
+        _sync_node_sockets_in_place(node, input_specs, output_specs)
         element_index_socket = node.inputs.get("Element Index")
         if element_index_socket is not None and hasattr(element_index_socket, "default_value"):
             try:
@@ -151,10 +189,7 @@ def build_context_geometry_node_classes(
                 ("AFSocketFlow", "Flow Out"),
                 ("AFSocketReport", "Report"),
             )
-            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
-            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
-            if input_signature != input_specs or output_signature != output_specs:
-                _rebuild_sockets(node, input_specs, output_specs)
+            _sync_node_sockets_in_place(node, input_specs, output_specs)
         finally:
             set_geometry_attribute_sync_guard.discard(node_key)
 
@@ -176,10 +211,7 @@ def build_context_geometry_node_classes(
                 ("AFSocketObjectList", "Carrier Object"),
                 ("AFSocketReport", "Report"),
             )
-            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
-            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
-            if input_signature != input_specs or output_signature != output_specs:
-                _rebuild_sockets(node, input_specs, output_specs)
+            _sync_node_sockets_in_place(node, input_specs, output_specs)
         finally:
             publish_geometry_attribute_sync_guard.discard(node_key)
 
@@ -193,9 +225,6 @@ def build_context_geometry_node_classes(
 
         def init(self, context):
             del context
-            index_socket = self.inputs.new("NodeSocketInt", "Object Index")
-            if hasattr(index_socket, "default_value"):
-                index_socket.default_value = 0
             self.outputs.new("AFSocketObjectList", "Object")
             self.outputs.new("NodeSocketInt", "Object Index")
             self.outputs.new("NodeSocketInt", "Object Count")
@@ -209,17 +238,28 @@ def build_context_geometry_node_classes(
         def update(self):
             _sync_property_context_sockets(self)
 
-    class AFNodeSampleObjectIndex(AFBaseNode, bpy.types.Node):
-        bl_idname = "AFNodeSampleObjectIndex"
-        bl_label = "Sample Object Index"
+    class AFNodeExtractPropertyAssignments(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeExtractPropertyAssignments"
+        bl_label = "Extract Property Assignments"
+        bl_description = "Extract Property Assignments from the input Property Package using current Property Context"
         bl_icon = "BLANK1"
 
-        mode: bpy.props.EnumProperty(
-            name="Mode",
-            items=SAMPLE_OBJECT_INDEX_MODE_ITEMS,
-            default="FLOAT",
-            update=lambda self, context: self._sync_sockets(),
-        )
+        def draw_label(self):
+            return iface_("Extract Prop Assigns")
+
+        def init(self, context):
+            del context
+            self.inputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
+            self.outputs.new("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME)
+            self.outputs.new("AFSocketReport", "Report")
+            _hide_default_auxiliary_outputs(self)
+            _set_default_node_width(self)
+            _set_node_color(self, "GEOMETRY")
+
+    class AFNodeSampleContextData(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeSampleContextData"
+        bl_label = "Sample Context Data"
+        bl_icon = "BLANK1"
 
         def init(self, context):
             del context
@@ -227,12 +267,8 @@ def build_context_geometry_node_classes(
             _set_default_node_width(self)
             _set_node_color(self, "GEOMETRY")
 
-        def draw_buttons(self, context, layout):
-            del context
-            layout.prop(self, "mode", text="")
-
         def _sync_sockets(self):
-            _sync_sample_object_index_sockets(self)
+            _sync_sample_context_data_sockets(self)
 
         def update(self):
             self._sync_sockets()
@@ -383,13 +419,14 @@ def build_context_geometry_node_classes(
 
     return {
         "_sync_property_context_sockets": _sync_property_context_sockets,
-        "_sync_sample_object_index_sockets": _sync_sample_object_index_sockets,
+        "_sync_sample_context_data_sockets": _sync_sample_context_data_sockets,
         "_sync_context_reduce_value_sockets": _sync_context_reduce_value_sockets,
         "_sync_geometry_attribute_node_sockets": _sync_geometry_attribute_node_sockets,
         "_sync_set_geometry_attribute_node_sockets": _sync_set_geometry_attribute_node_sockets,
         "_sync_publish_geometry_attribute_node_sockets": _sync_publish_geometry_attribute_node_sockets,
         "AFNodePropertyContext": AFNodePropertyContext,
-        "AFNodeSampleObjectIndex": AFNodeSampleObjectIndex,
+        "AFNodeExtractPropertyAssignments": AFNodeExtractPropertyAssignments,
+        "AFNodeSampleContextData": AFNodeSampleContextData,
         "AFNodeReduceContextValue": AFNodeReduceContextValue,
         "AFNodeReadGeometryAttribute": AFNodeReadGeometryAttribute,
         "AFNodeSetGeometryAttribute": AFNodeSetGeometryAttribute,

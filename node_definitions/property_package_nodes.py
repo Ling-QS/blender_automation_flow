@@ -242,6 +242,23 @@ def build_property_package_node_classes(
         _sync_read_property_package_target(node)
         _refresh_property_package_dependents(node)
 
+    @contextmanager
+    def _runtime_sync_suspended_during_node_init():
+        suspend_runtime_sync = None
+        resume_runtime_sync = None
+        try:
+            from ..node_system.tree import resume_runtime_sync, suspend_runtime_sync
+        except Exception:
+            suspend_runtime_sync = None
+            resume_runtime_sync = None
+        if suspend_runtime_sync is not None:
+            suspend_runtime_sync()
+        try:
+            yield
+        finally:
+            if resume_runtime_sync is not None:
+                resume_runtime_sync()
+
     class AFNodeParsePropertyPackage(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeParsePropertyPackage"
         bl_label = "Parse Property Package"
@@ -253,12 +270,13 @@ def build_property_package_node_classes(
         sort_mode: bpy.props.EnumProperty(name="Sort Mode", items=SORT_MODE_ITEMS, default="NAME_ASC")
 
         def init(self, context):
-            self.inputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
-            self.outputs.new("AFSocketObjectList", "Object List")
-            self.outputs.new("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME)
-            self.outputs.new("AFSocketReport", "Report")
-            _hide_default_auxiliary_outputs(self)
-            _set_node_color(self, "GEOMETRY")
+            with _runtime_sync_suspended_during_node_init():
+                self.inputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
+                self.outputs.new("AFSocketObjectList", "Object List")
+                self.outputs.new("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME)
+                self.outputs.new("AFSocketReport", "Report")
+                _hide_default_auxiliary_outputs(self)
+                _set_node_color(self, "GEOMETRY")
 
         def draw_buttons(self, context, layout):
             layout.prop(self, "sort_mode", text="")
@@ -384,13 +402,14 @@ def build_property_package_node_classes(
 
         def init(self, context):
             del context
-            self.inputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
-            self.inputs.new("AFSocketObjectList", "Object List")
-            self.inputs.new("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME)
-            self.outputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
-            self.outputs.new("AFSocketReport", "Report")
-            _hide_default_auxiliary_outputs(self)
-            _set_node_color(self, "GEOMETRY")
+            with _runtime_sync_suspended_during_node_init():
+                self.inputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
+                self.inputs.new("AFSocketObjectList", "Object List")
+                self.inputs.new("AFSocketPropertyDefinition", PROPERTY_DEFINITION_SOCKET_NAME)
+                self.outputs.new("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)
+                self.outputs.new("AFSocketReport", "Report")
+                _hide_default_auxiliary_outputs(self)
+                _set_node_color(self, "GEOMETRY")
 
         def draw_buttons(self, context, layout):
             del context

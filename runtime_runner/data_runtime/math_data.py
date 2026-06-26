@@ -5,6 +5,7 @@ import re
 from mathutils import Euler, Matrix, Quaternion, Vector
 
 from ...runtime_core.constants import ROTATION_IDENTITY_QUATERNION
+from ...runtime_flow.helpers import _find_single_from_input_socket
 from ...runtime_flow.helpers import _socket_specific_output_key
 from ...runtime_math.values import (
     _matrix_to_payload,
@@ -16,6 +17,274 @@ from ...runtime_math.values import (
 
 
 class RuntimeMathDataMixin:
+    _FLOAT32_EPSILON = 1.1920928955078125e-07
+
+    @staticmethod
+    def _matrix_is_identity(matrix_value, epsilon=1e-8):
+        try:
+            identity = Matrix.Identity(4)
+            for row_index in range(4):
+                for column_index in range(4):
+                    if abs(float(matrix_value[row_index][column_index]) - float(identity[row_index][column_index])) > float(epsilon):
+                        return False
+            return True
+        except Exception:
+            return False
+
+    def _matrix_input_has_no_effective_source(self, node, input_name):
+        input_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)(input_name)
+        if input_socket is None:
+            return True
+        if not bool(getattr(input_socket, "is_linked", False)):
+            return True
+        from_node, from_socket = _find_single_from_input_socket(input_socket)
+        if from_node is None or from_socket is None:
+            return True
+        if str(getattr(from_node, "bl_idname", "") or "") != "NodeGroupInput":
+            return False
+        upstream_node, _upstream_socket, parent_group_path = self._resolve_group_input_source(
+            from_node,
+            from_socket,
+            self.current_group_path,
+        )
+        if upstream_node is not None:
+            return False
+        del parent_group_path
+        return True
+
+    @staticmethod
+    def _compare_numeric_values(lhs, rhs, op, epsilon):
+        if op == "EQUAL":
+            return abs(lhs - rhs) <= epsilon
+        if op == "NOT_EQUAL":
+            return abs(lhs - rhs) > epsilon
+        if op == "LESS_THAN":
+            return lhs < rhs - epsilon
+        if op == "LESS_EQUAL":
+            return lhs <= rhs + epsilon
+        if op == "GREATER_THAN":
+            return lhs > rhs + epsilon
+        return lhs >= rhs - epsilon
+
+    @staticmethod
+    def _safe_math_power(base, exponent):
+        if exponent == 0.0:
+            return 1.0
+        if base == 0.0:
+            return 0.0
+        if base < 0.0 and not float(exponent).is_integer():
+            return 0.0
+        return math.pow(base, exponent)
+
+    @staticmethod
+    def _safe_math_logarithm(value, base):
+        if value <= 0.0 or base <= 0.0:
+            return 0.0
+        denominator = math.log(base)
+        return math.log(value) / denominator if denominator != 0.0 else 0.0
+
+    @staticmethod
+    def _safe_math_sqrt(value):
+        return math.sqrt(max(float(value), 0.0))
+
+    @staticmethod
+    def _safe_math_inverse_sqrt(value):
+        return 1.0 / math.sqrt(value) if value > 0.0 else 0.0
+
+    @staticmethod
+    def _safe_math_asin(value):
+        return math.asin(max(-1.0, min(1.0, float(value))))
+
+    @staticmethod
+    def _safe_math_acos(value):
+        return math.acos(max(-1.0, min(1.0, float(value))))
+
+    @staticmethod
+    def _safe_math_wrap(value, minimum, maximum):
+        span = maximum - minimum
+        return value - (span * math.floor((value - minimum) / span)) if span != 0.0 else minimum
+
+    @staticmethod
+    def _safe_math_pingpong(value, scale):
+        if scale == 0.0:
+            return 0.0
+        cycle = scale * 2.0
+        return abs((value - scale) - math.floor((value - scale) / cycle) * cycle - scale)
+
+    @staticmethod
+    def _safe_math_smooth_min(a, b, distance):
+        if distance != 0.0:
+            h = max(distance - abs(a - b), 0.0) / distance
+            return min(a, b) - h * h * h * distance * (1.0 / 6.0)
+        return min(a, b)
+
+    @staticmethod
+    def _safe_math_atan2(y, x):
+        return 0.0 if x == 0.0 and y == 0.0 else math.atan2(y, x)
+
+    @staticmethod
+    def _clamp_math_result(value, enabled):
+        if not bool(enabled):
+            return value
+        if value < 0.0:
+            return 0.0
+        if value > 1.0:
+            return 1.0
+        return value
+
+    @staticmethod
+    def _safe_math_exp(value):
+        try:
+            return math.exp(value)
+        except OverflowError:
+            return math.inf
+
+    @staticmethod
+    def _safe_math_sinh(value):
+        try:
+            return math.sinh(value)
+        except OverflowError:
+            return math.inf if value >= 0.0 else -math.inf
+
+    @staticmethod
+    def _safe_math_cosh(value):
+        try:
+            return math.cosh(value)
+        except OverflowError:
+            return math.inf
+
+    @staticmethod
+    def _safe_float_divide(a, b):
+        return a / b if b != 0.0 else 0.0
+
+    @staticmethod
+    def _safe_float_modulo(a, b):
+        return math.fmod(a, b) if b != 0.0 else 0.0
+
+    @staticmethod
+    def _safe_float_floored_modulo(a, b):
+        return a - math.floor(a / b) * b if b != 0.0 else 0.0
+
+    @staticmethod
+    def _safe_math_sign(value):
+        if value == 0.0:
+            return 0.0
+        return 1.0 if value > 0.0 else -1.0
+
+    @staticmethod
+    def _round_half_away_from_zero(value):
+        if value >= 0.0:
+            return math.floor(value + 0.5)
+        return math.ceil(value - 0.5)
+
+    @staticmethod
+    def _safe_int_divide(a, b):
+        return int(a / b) if b != 0 else 0
+
+    @staticmethod
+    def _safe_int_divide_round(a, b):
+        if b == 0:
+            return 0
+        return int(RuntimeMathDataMixin._round_half_away_from_zero(a / b))
+
+    @staticmethod
+    def _safe_int_divide_floor(a, b):
+        return int(math.floor(a / b)) if b != 0 else 0
+
+    @staticmethod
+    def _safe_int_divide_ceil(a, b):
+        return int(math.ceil(a / b)) if b != 0 else 0
+
+    @staticmethod
+    def _safe_int_modulo(a, b):
+        return a - int(a / b) * b if b != 0 else 0
+
+    @staticmethod
+    def _safe_int_floored_modulo(a, b):
+        return a - math.floor(a / b) * b if b != 0 else 0
+
+    @staticmethod
+    def _safe_int_power(a, b):
+        try:
+            return int(math.pow(a, b))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _safe_int_gcd(a, b):
+        return math.gcd(int(a), int(b))
+
+    @staticmethod
+    def _safe_int_lcm(a, b):
+        a = int(a)
+        b = int(b)
+        if a == 0 or b == 0:
+            return 0
+        return abs(a * b) // math.gcd(a, b)
+
+    @staticmethod
+    def _vector_unary(vector_value, fn):
+        return Vector(tuple(float(fn(float(component))) for component in tuple(vector_value)[:3]))
+
+    @staticmethod
+    def _vector_binary(lhs, rhs, fn):
+        lhs_values = tuple(lhs)[:3]
+        rhs_values = tuple(rhs)[:3]
+        return Vector(tuple(float(fn(float(a), float(b))) for a, b in zip(lhs_values, rhs_values)))
+
+    @staticmethod
+    def _safe_vector_divide(lhs, rhs):
+        return RuntimeMathDataMixin._vector_binary(lhs, rhs, RuntimeMathDataMixin._safe_float_divide)
+
+    @staticmethod
+    def _safe_vector_modulo(lhs, rhs):
+        return RuntimeMathDataMixin._vector_binary(lhs, rhs, RuntimeMathDataMixin._safe_float_modulo)
+
+    @staticmethod
+    def _safe_vector_power(lhs, rhs):
+        return RuntimeMathDataMixin._vector_binary(lhs, rhs, RuntimeMathDataMixin._safe_math_power)
+
+    @staticmethod
+    def _safe_vector_sign(vector_value):
+        return RuntimeMathDataMixin._vector_unary(vector_value, RuntimeMathDataMixin._safe_math_sign)
+
+    @staticmethod
+    def _safe_vector_wrap(value, minimum, maximum):
+        return Vector(
+            tuple(
+                float(RuntimeMathDataMixin._safe_math_wrap(float(component), float(minimum_component), float(maximum_component)))
+                for component, minimum_component, maximum_component in zip(tuple(value)[:3], tuple(minimum)[:3], tuple(maximum)[:3])
+            )
+        )
+
+    @staticmethod
+    def _safe_vector_snap(lhs, rhs):
+        return RuntimeMathDataMixin._vector_binary(
+            lhs,
+            rhs,
+            lambda a, b: math.floor(RuntimeMathDataMixin._safe_float_divide(a, b)) * b,
+        )
+
+    @staticmethod
+    def _safe_vector_refract(incident, normal, ior):
+        incident = Vector(tuple(float(component) for component in tuple(incident)[:3]))
+        if Vector(normal).length == 0.0:
+            unit_normal = Vector((0.0, 0.0, 0.0))
+        else:
+            unit_normal = Vector(normal).normalized()
+        dot_value = float(unit_normal.dot(incident))
+        k = 1.0 - ior * ior * (1.0 - dot_value * dot_value)
+        if k < 0.0:
+            return Vector((0.0, 0.0, 0.0))
+        return (ior * incident) - ((ior * dot_value + math.sqrt(k)) * unit_normal)
+
+    @staticmethod
+    def _safe_vector_faceforward(vector_value, incident, reference):
+        vector_value = Vector(tuple(float(component) for component in tuple(vector_value)[:3]))
+        incident = Vector(tuple(float(component) for component in tuple(incident)[:3]))
+        reference = Vector(tuple(float(component) for component in tuple(reference)[:3]))
+        return vector_value if float(reference.dot(incident)) < 0.0 else -vector_value
+
     def _evaluate_math_data_node(self, node, node_type):
         if node_type == "AFNodeFloatInput":
             self._set_scalar_vector_outputs(node, float_value=node.value)
@@ -34,7 +303,12 @@ class RuntimeMathDataMixin:
             return True
 
         if node_type == "AFNodeStringInput":
-            self._set_output(node, "string_value", str(getattr(node, "value", "") or ""))
+            string_socket = getattr(getattr(node, "outputs", None), "get", lambda _name: None)("String")
+            if string_socket is not None and str(getattr(string_socket, "bl_idname", "") or "") == "AFSocketString":
+                value = str(getattr(string_socket, "default_value", "") or "")
+            else:
+                value = str(getattr(node, "value", "") or "")
+            self._set_output(node, "string_value", value)
             return True
 
         if node_type == "AFNodeInputRotation":
@@ -109,39 +383,74 @@ class RuntimeMathDataMixin:
 
         if node_type == "AFNodeMath":
             op = node.operation
-            unary_ops = {"ABSOLUTE", "SIGN", "FLOOR", "CEIL", "ROUND", "FRACT"}
+            use_clamp = bool(getattr(node, "use_clamp", False))
+            unary_ops = {
+                "SQRT",
+                "INVERSE_SQRT",
+                "ABSOLUTE",
+                "EXPONENT",
+                "SIGN",
+                "ROUND",
+                "FLOOR",
+                "CEIL",
+                "TRUNC",
+                "FRACT",
+                "SINE",
+                "COSINE",
+                "TANGENT",
+                "ARCSINE",
+                "ARCCOSINE",
+                "ARCTANGENT",
+                "SINH",
+                "COSH",
+                "TANH",
+                "RADIANS",
+                "DEGREES",
+            }
             if op in unary_ops:
                 a = self._input_float(node, "Value", 0.0)
                 b = 0.0
+                c = 0.0
+            elif op == "MULTIPLY_ADD":
+                a = self._input_float(node, "Value", 0.0)
+                b = self._input_float(node, "Multiplier", 0.0)
+                c = self._input_float(node, "Addend", 0.0)
+            elif op == "POWER":
+                a = self._input_float(node, "Base", 0.0)
+                b = self._input_float(node, "Exponent", 0.0)
+                c = 0.0
+            elif op == "LOGARITHM":
+                a = self._input_float(node, "Value", 0.0)
+                b = self._input_float(node, "Base", 10.0)
+                c = 0.0
+            elif op == "COMPARE":
+                a = self._input_float(node, "A", 0.0)
+                b = self._input_float(node, "B", 0.0)
+                c = self._input_float(node, "Epsilon", 1e-6)
+            elif op in {"SMOOTH_MIN", "SMOOTH_MAX"}:
+                a = self._input_float(node, "A", 0.0)
+                b = self._input_float(node, "B", 0.0)
+                c = self._input_float(node, "Distance", 0.0)
             elif op == "WRAP":
-                value_in = self._input_float(node, "Value", 0.0)
-                min_v = self._input_float(node, "Min", 0.0)
-                max_v = self._input_float(node, "Max", 1.0)
-                span = max_v - min_v
-                value = min_v if span == 0.0 else ((value_in - min_v) % span) + min_v
-                self._set_scalar_vector_outputs(node, float_value=value)
-                return True
+                a = self._input_float(node, "Value", 0.0)
+                b = self._input_float(node, "Min", 0.0)
+                c = self._input_float(node, "Max", 1.0)
             elif op == "SNAP":
-                value_in = self._input_float(node, "Value", 0.0)
-                increment = self._input_float(node, "Increment", 1.0)
-                value = round(value_in / increment) * increment if increment != 0.0 else value_in
-                self._set_scalar_vector_outputs(node, float_value=value)
-                return True
+                a = self._input_float(node, "Value", 0.0)
+                b = self._input_float(node, "Increment", 0.0)
+                c = 0.0
             elif op == "PINGPONG":
-                value_in = self._input_float(node, "Value", 0.0)
-                scale = abs(self._input_float(node, "Scale", 1.0))
-                if scale == 0.0:
-                    value = 0.0
-                else:
-                    t = math.fmod(value_in, 2.0 * scale)
-                    if t < 0.0:
-                        t += 2.0 * scale
-                    value = scale - abs(t - scale)
-                self._set_scalar_vector_outputs(node, float_value=value)
-                return True
+                a = self._input_float(node, "Value", 0.0)
+                b = self._input_float(node, "Scale", 1.0)
+                c = 0.0
+            elif op in {"LESS_THAN", "GREATER_THAN"}:
+                a = self._input_float(node, "Value", 0.0)
+                b = self._input_float(node, "Threshold", 0.0)
+                c = 0.0
             else:
                 a = self._input_float(node, "A", 0.0)
                 b = self._input_float(node, "B", 0.0)
+                c = 0.0
 
             if op == "ADD":
                 value = a + b
@@ -151,39 +460,105 @@ class RuntimeMathDataMixin:
                 value = a * b
             elif op == "DIVIDE":
                 value = a / b if b != 0.0 else 0.0
+            elif op == "MULTIPLY_ADD":
+                value = a * b + c
             elif op == "POWER":
-                value = math.pow(a, b)
+                value = self._safe_math_power(a, b)
+            elif op == "LOGARITHM":
+                value = self._safe_math_logarithm(a, b)
+            elif op == "SQRT":
+                value = self._safe_math_sqrt(a)
+            elif op == "INVERSE_SQRT":
+                value = self._safe_math_inverse_sqrt(a)
             elif op == "MINIMUM":
                 value = min(a, b)
             elif op == "MAXIMUM":
                 value = max(a, b)
             elif op == "ABSOLUTE":
                 value = abs(a)
+            elif op == "EXPONENT":
+                value = self._safe_math_exp(a)
+            elif op == "LESS_THAN":
+                value = 1.0 if a < b else 0.0
+            elif op == "GREATER_THAN":
+                value = 1.0 if a > b else 0.0
             elif op == "SIGN":
                 value = 0.0 if a == 0.0 else (1.0 if a > 0.0 else -1.0)
+            elif op == "COMPARE":
+                tolerance = max(float(c), self._FLOAT32_EPSILON)
+                value = 1.0 if (a == b or abs(a - b) <= tolerance) else 0.0
+            elif op == "SMOOTH_MIN":
+                value = self._safe_math_smooth_min(a, b, c)
+            elif op == "SMOOTH_MAX":
+                value = -self._safe_math_smooth_min(-a, -b, c)
             elif op == "FLOOR":
                 value = math.floor(a)
             elif op == "CEIL":
                 value = math.ceil(a)
             elif op == "ROUND":
-                value = round(a)
+                value = math.floor(a + 0.5)
+            elif op == "TRUNC":
+                value = math.floor(a) if a >= 0.0 else math.ceil(a)
             elif op == "FRACT":
                 value = a - math.floor(a)
             elif op == "MODULO":
                 value = math.fmod(a, b) if b != 0.0 else 0.0
+            elif op == "FLOORED_MODULO":
+                value = a - math.floor(a / b) * b if b != 0.0 else 0.0
+            elif op == "WRAP":
+                value = self._safe_math_wrap(a, b, c)
+            elif op == "SNAP":
+                value = math.floor((a / b) if b != 0.0 else 0.0) * b
+            elif op == "PINGPONG":
+                value = self._safe_math_pingpong(a, b)
+            elif op == "SINE":
+                value = math.sin(a)
+            elif op == "COSINE":
+                value = math.cos(a)
+            elif op == "TANGENT":
+                value = math.tan(a)
+            elif op == "ARCSINE":
+                value = self._safe_math_asin(a)
+            elif op == "ARCCOSINE":
+                value = self._safe_math_acos(a)
+            elif op == "ARCTANGENT":
+                value = math.atan(a)
+            elif op == "ARCTAN2":
+                value = self._safe_math_atan2(a, b)
+            elif op == "SINH":
+                value = self._safe_math_sinh(a)
+            elif op == "COSH":
+                value = self._safe_math_cosh(a)
+            elif op == "TANH":
+                value = math.tanh(a)
+            elif op == "RADIANS":
+                value = a * (math.pi / 180.0)
+            elif op == "DEGREES":
+                value = a * (180.0 / math.pi)
             else:
                 value = a
+            value = self._clamp_math_result(value, use_clamp)
             self._set_scalar_vector_outputs(node, float_value=value)
             return True
 
         if node_type == "AFNodeIntegerMath":
             op = node.operation
-            if op in {"ABSOLUTE", "SIGN"}:
+            if op in {"ABSOLUTE", "NEGATE", "SIGN"}:
                 a = self._input_int(node, "Value", 0)
                 b = 0
+                c = 0
+            elif op == "MULTIPLY_ADD":
+                a = self._input_int(node, "Value", 0)
+                b = self._input_int(node, "Multiplier", 0)
+                c = self._input_int(node, "Addend", 0)
+            elif op == "POWER":
+                a = self._input_int(node, "Base", 0)
+                b = self._input_int(node, "Exponent", 0)
+                c = 0
             else:
                 a = self._input_int(node, "A", 0)
                 b = self._input_int(node, "B", 0)
+                c = 0
 
             if op == "ADD":
                 value = a + b
@@ -191,20 +566,36 @@ class RuntimeMathDataMixin:
                 value = a - b
             elif op == "MULTIPLY":
                 value = a * b
+            elif op == "MULTIPLY_ADD":
+                value = a * b + c
             elif op == "DIVIDE":
-                value = int(a / b) if b != 0 else 0
+                value = self._safe_int_divide(a, b)
+            elif op == "DIVIDE_ROUND":
+                value = self._safe_int_divide_round(a, b)
+            elif op == "DIVIDE_FLOOR":
+                value = self._safe_int_divide_floor(a, b)
+            elif op == "DIVIDE_CEIL":
+                value = self._safe_int_divide_ceil(a, b)
             elif op == "MODULO":
-                value = a % b if b != 0 else 0
+                value = self._safe_int_modulo(a, b)
+            elif op == "FLOORED_MODULO":
+                value = self._safe_int_floored_modulo(a, b)
             elif op == "POWER":
-                value = int(math.pow(a, b))
+                value = self._safe_int_power(a, b)
             elif op == "MINIMUM":
                 value = min(a, b)
             elif op == "MAXIMUM":
                 value = max(a, b)
             elif op == "ABSOLUTE":
                 value = abs(a)
+            elif op == "NEGATE":
+                value = -a
             elif op == "SIGN":
                 value = 0 if a == 0 else (1 if a > 0 else -1)
+            elif op == "GCD":
+                value = self._safe_int_gcd(a, b)
+            elif op == "LCM":
+                value = self._safe_int_lcm(a, b)
             else:
                 value = a
             self._set_scalar_vector_outputs(node, int_value=value)
@@ -230,6 +621,12 @@ class RuntimeMathDataMixin:
                 value = not (a and b)
             elif op == "NOR":
                 value = not (a or b)
+            elif op == "XNOR":
+                value = bool(a) == bool(b)
+            elif op == "IMPLY":
+                value = (not bool(a)) or bool(b)
+            elif op == "NIMPLY":
+                value = bool(a) and (not bool(b))
             else:
                 value = False
             self._set_scalar_vector_outputs(node, bool_value=value)
@@ -239,24 +636,90 @@ class RuntimeMathDataMixin:
             op = node.operation
             vec = Vector((0.0, 0.0, 0.0))
             scalar = 0.0
-            if op in {"LENGTH", "NORMALIZE", "SCALE", "PROJECT", "REFLECT"}:
+            if op in {
+                "LENGTH",
+                "NORMALIZE",
+                "SCALE",
+                "PROJECT",
+                "REFLECT",
+                "REFRACT",
+                "FACEFORWARD",
+                "ABSOLUTE",
+                "SIGN",
+                "ROUND",
+                "FLOOR",
+                "CEIL",
+                "FRACTION",
+                "SINE",
+                "COSINE",
+                "TANGENT",
+                "WRAP",
+                "SNAP",
+                "MULTIPLY_ADD",
+            }:
                 a = self._input_vector(node, "Vector")
+            elif op == "POWER":
+                a = self._input_vector(node, "Base")
             else:
                 a = self._input_vector(node, "A")
 
-            if op in {"ADD", "SUBTRACT", "DISTANCE", "DOT_PRODUCT", "CROSS_PRODUCT"}:
+            if op in {
+                "ADD",
+                "SUBTRACT",
+                "MULTIPLY",
+                "DIVIDE",
+                "DISTANCE",
+                "DOT_PRODUCT",
+                "CROSS_PRODUCT",
+                "MINIMUM",
+                "MAXIMUM",
+                "MODULO",
+            }:
                 b = self._input_vector(node, "B")
             elif op == "PROJECT":
                 b = self._input_vector(node, "On")
             elif op == "REFLECT":
                 b = self._input_vector(node, "Normal")
+            elif op == "REFRACT":
+                b = self._input_vector(node, "Normal")
+            elif op == "FACEFORWARD":
+                b = self._input_vector(node, "Incident")
+            elif op == "MULTIPLY_ADD":
+                b = self._input_vector(node, "Multiplier")
+            elif op == "POWER":
+                b = self._input_vector(node, "Exponent")
+            elif op == "WRAP":
+                b = self._input_vector(node, "Min")
+            elif op == "SNAP":
+                b = self._input_vector(node, "Increment")
             else:
                 b = Vector((0.0, 0.0, 0.0))
+
+            if op == "FACEFORWARD":
+                c = self._input_vector(node, "Reference")
+            elif op == "MULTIPLY_ADD":
+                c = self._input_vector(node, "Addend")
+            elif op == "WRAP":
+                c = self._input_vector(node, "Max")
+            else:
+                c = Vector((0.0, 0.0, 0.0))
 
             if op == "ADD":
                 vec = a + b
             elif op == "SUBTRACT":
                 vec = a - b
+            elif op == "MULTIPLY":
+                vec = Vector((float(a.x) * float(b.x), float(a.y) * float(b.y), float(a.z) * float(b.z)))
+            elif op == "DIVIDE":
+                vec = self._safe_vector_divide(a, b)
+            elif op == "MULTIPLY_ADD":
+                vec = Vector(
+                    (
+                        float(a.x) * float(b.x) + float(c.x),
+                        float(a.y) * float(b.y) + float(c.y),
+                        float(a.z) * float(b.z) + float(c.z),
+                    )
+                )
             elif op == "SCALE":
                 scale = self._input_float(node, "Scale", 1.0)
                 vec = a * scale
@@ -270,6 +733,26 @@ class RuntimeMathDataMixin:
                 vec = a.cross(b)
             elif op == "NORMALIZE":
                 vec = a.normalized() if a.length != 0.0 else Vector((0.0, 0.0, 0.0))
+            elif op == "ABSOLUTE":
+                vec = self._vector_unary(a, abs)
+            elif op == "POWER":
+                vec = self._safe_vector_power(a, b)
+            elif op == "SIGN":
+                vec = self._safe_vector_sign(a)
+            elif op == "MINIMUM":
+                vec = self._vector_binary(a, b, min)
+            elif op == "MAXIMUM":
+                vec = self._vector_binary(a, b, max)
+            elif op == "ROUND":
+                vec = self._vector_unary(a, lambda component: math.floor(component + 0.5))
+            elif op == "FLOOR":
+                vec = self._vector_unary(a, math.floor)
+            elif op == "CEIL":
+                vec = self._vector_unary(a, math.ceil)
+            elif op == "FRACTION":
+                vec = self._vector_unary(a, lambda component: component - math.floor(component))
+            elif op == "MODULO":
+                vec = self._safe_vector_modulo(a, b)
             elif op == "PROJECT":
                 if b.length == 0.0:
                     vec = Vector((0.0, 0.0, 0.0))
@@ -282,16 +765,40 @@ class RuntimeMathDataMixin:
                 else:
                     normal = b.normalized()
                     vec = a - 2.0 * a.dot(normal) * normal
+            elif op == "REFRACT":
+                vec = self._safe_vector_refract(a, b, self._input_float(node, "IOR", 1.0))
+            elif op == "FACEFORWARD":
+                vec = self._safe_vector_faceforward(a, b, c)
+            elif op == "WRAP":
+                vec = self._safe_vector_wrap(a, b, c)
+            elif op == "SNAP":
+                vec = self._safe_vector_snap(a, b)
+            elif op == "SINE":
+                vec = self._vector_unary(a, math.sin)
+            elif op == "COSINE":
+                vec = self._vector_unary(a, math.cos)
+            elif op == "TANGENT":
+                vec = self._vector_unary(a, math.tan)
             self._set_scalar_vector_outputs(node, vector_value=vec, float_value=scalar)
             return True
 
         if node_type == "AFNodeMix":
             factor = self._input_float(node, "Factor", 0.5)
+            if bool(getattr(node, "clamp_factor", True)):
+                factor = max(0.0, min(1.0, float(factor)))
             if node.mode == "VECTOR":
                 a = self._input_vector(node, "A")
                 b = self._input_vector(node, "B")
                 value = a.lerp(b, factor)
                 self._set_scalar_vector_outputs(node, vector_value=value)
+            elif node.mode == "ROTATION":
+                a = self._input_rotation(node, "A")
+                b = self._input_rotation(node, "B")
+                try:
+                    value = a.slerp(b, float(factor))
+                except Exception:
+                    value = a.copy()
+                self._set_output(node, "rotation_value", _quaternion_to_payload(value))
             else:
                 a = self._input_float(node, "A", 0.0)
                 b = self._input_float(node, "B", 0.0)
@@ -334,6 +841,10 @@ class RuntimeMathDataMixin:
                 "FLOAT": "AFSocketFloatValue",
                 "INTEGER": "AFSocketIntegerValue",
                 "VECTOR": "AFSocketVectorValue",
+                "ROTATION": "AFSocketRotationValue",
+                "MATRIX": "AFSocketMatrixValue",
+                "PROPERTY_ASSIGNMENT": "AFSocketPropertyAssignment",
+                "PROPERTY_PACKAGE": "AFSocketPropertyPackage",
                 "STRING": "AFSocketString",
                 "DISPLAY_TYPE": "AFSocketDisplayType",
                 "ROTATION_MODE": "AFSocketRotationMode",
@@ -349,6 +860,14 @@ class RuntimeMathDataMixin:
                 mode = str(getattr(node, "mode", "FLOAT") or "FLOAT")
                 if mode == "VECTOR":
                     value = (0.0, 0.0, 0.0)
+                elif mode == "ROTATION":
+                    value = self._typed_empty_output_value("rotation_value", node)
+                elif mode == "MATRIX":
+                    value = self._typed_empty_output_value("matrix_value", node)
+                elif mode == "PROPERTY_ASSIGNMENT":
+                    value = self._typed_empty_output_value("property_assignment", node)
+                elif mode == "PROPERTY_PACKAGE":
+                    value = self._typed_empty_output_value("property_package", node)
                 elif mode == "BOOLEAN":
                     value = False
                 elif mode == "INTEGER":
@@ -377,6 +896,26 @@ class RuntimeMathDataMixin:
                         tuple(getattr(selected_socket, "default_value", (0.0, 0.0, 0.0))),
                     )
                 )
+            elif mode == "ROTATION":
+                value = _quaternion_to_payload(
+                    self._input_rotation(
+                        node,
+                        selected_name,
+                        tuple(getattr(selected_socket, "default_value", (1.0, 0.0, 0.0, 0.0))),
+                    )
+                )
+            elif mode == "MATRIX":
+                value = _matrix_to_payload(
+                    self._input_matrix(
+                        node,
+                        selected_name,
+                        tuple(getattr(selected_socket, "default_value", ())),
+                    )
+                )
+            elif mode == "PROPERTY_ASSIGNMENT":
+                value = self._get_linked_output(node, selected_name, "property_assignment")
+            elif mode == "PROPERTY_PACKAGE":
+                value = self._get_linked_output(node, selected_name, "property_package")
             elif mode == "BOOLEAN":
                 value = bool(
                     self._input_bool(
@@ -429,49 +968,72 @@ class RuntimeMathDataMixin:
             return True
 
         if node_type == "AFNodeCompare":
-            eps = max(0.0, float(node.epsilon))
+            mode = str(getattr(node, "mode", "FLOAT") or "FLOAT")
+            if mode == "STRING":
+                lhs = str(self._input_string_forgiving(node, "A", "") or "")
+                rhs = str(self._input_string_forgiving(node, "B", "") or "")
+                op = str(getattr(node, "string_operation", "EQUAL") or "EQUAL")
+                if op == "NOT_EQUAL":
+                    value = lhs != rhs
+                elif op == "CONTAINS":
+                    value = rhs in lhs
+                elif op == "STARTS_WITH":
+                    value = lhs.startswith(rhs)
+                elif op == "ENDS_WITH":
+                    value = lhs.endswith(rhs)
+                else:
+                    value = lhs == rhs
+                self._set_scalar_vector_outputs(node, bool_value=bool(value))
+                return True
+
             op = node.operation
-            if node.mode == "VECTOR":
+            if mode == "VECTOR":
                 a = self._input_vector(node, "A")
                 b = self._input_vector(node, "B")
-                metric = a.length if node.vector_mode == "LENGTH" else (a - b).length
-                target = float(node.threshold)
-                lhs = metric
-                rhs = target
+                eps = max(0.0, float(self._input_float(node, "Epsilon", 1e-6)))
+                vector_mode = str(getattr(node, "vector_mode", "ELEMENT") or "ELEMENT")
+                if vector_mode == "ELEMENT":
+                    value = all(
+                        self._compare_numeric_values(float(lhs_component), float(rhs_component), op, eps)
+                        for lhs_component, rhs_component in zip(tuple(a)[:3], tuple(b)[:3])
+                    )
+                    self._set_scalar_vector_outputs(node, bool_value=bool(value))
+                    return True
+                if vector_mode == "LENGTH":
+                    lhs = float(a.length)
+                    rhs = float(b.length)
+                elif vector_mode == "AVERAGE":
+                    lhs = (float(a.x) + float(a.y) + float(a.z)) / 3.0
+                    rhs = (float(b.x) + float(b.y) + float(b.z)) / 3.0
+                elif vector_mode == "DOT_PRODUCT":
+                    lhs = float(a.dot(b))
+                    rhs = self._input_float(node, "C", 0.0)
+                elif vector_mode == "DIRECTION":
+                    lhs_direction = _normalized_vector_or_none(a)
+                    rhs_direction = _normalized_vector_or_none(b)
+                    if lhs_direction is None or rhs_direction is None:
+                        lhs = 0.0
+                    else:
+                        dot = max(-1.0, min(1.0, float(lhs_direction.dot(rhs_direction))))
+                        lhs = float(math.acos(dot))
+                    rhs = self._input_float(node, "Angle", 0.0)
+                else:
+                    lhs = float(a.length)
+                    rhs = float(b.length)
+            elif mode == "INTEGER":
+                lhs = self._input_int(node, "A", 0)
+                rhs = self._input_int(node, "B", 0)
+                eps = 0.0
             else:
                 lhs = self._input_float(node, "A", 0.0)
                 rhs = self._input_float(node, "B", 0.0)
+                if op in {"EQUAL", "NOT_EQUAL"}:
+                    eps = max(0.0, float(self._input_float(node, "Epsilon", 1e-6)))
+                else:
+                    eps = 0.0
 
-            if op == "EQUAL":
-                value = abs(lhs - rhs) <= eps
-            elif op == "NOT_EQUAL":
-                value = abs(lhs - rhs) > eps
-            elif op == "LESS_THAN":
-                value = lhs < rhs - eps
-            elif op == "LESS_EQUAL":
-                value = lhs <= rhs + eps
-            elif op == "GREATER_THAN":
-                value = lhs > rhs + eps
-            else:
-                value = lhs >= rhs - eps
+            value = self._compare_numeric_values(lhs, rhs, op, eps)
             self._set_scalar_vector_outputs(node, bool_value=value)
-            return True
-
-        if node_type == "AFNodeStringCompare":
-            lhs = str(self._input_string_forgiving(node, "A", "") or "")
-            rhs = str(self._input_string_forgiving(node, "B", "") or "")
-            op = str(getattr(node, "operation", "EQUAL") or "EQUAL")
-            if op == "NOT_EQUAL":
-                value = lhs != rhs
-            elif op == "CONTAINS":
-                value = rhs in lhs
-            elif op == "STARTS_WITH":
-                value = lhs.startswith(rhs)
-            elif op == "ENDS_WITH":
-                value = lhs.endswith(rhs)
-            else:
-                value = lhs == rhs
-            self._set_scalar_vector_outputs(node, bool_value=bool(value))
             return True
 
         if node_type == "AFNodeClamp":
@@ -484,6 +1046,26 @@ class RuntimeMathDataMixin:
             return True
 
         if node_type == "AFNodeMapRange":
+            if str(getattr(node, "mode", "FLOAT") or "FLOAT") == "VECTOR":
+                value = self._input_vector(node, "Value", (0.0, 0.0, 0.0))
+                from_min = self._input_vector(node, "From Min", (0.0, 0.0, 0.0))
+                from_max = self._input_vector(node, "From Max", (1.0, 1.0, 1.0))
+                to_min = self._input_vector(node, "To Min", (0.0, 0.0, 0.0))
+                to_max = self._input_vector(node, "To Max", (1.0, 1.0, 1.0))
+                components = []
+                for component_value, component_from_min, component_from_max, component_to_min, component_to_max in zip(tuple(value)[:3], tuple(from_min)[:3], tuple(from_max)[:3], tuple(to_min)[:3], tuple(to_max)[:3]):
+                    if float(component_from_max) == float(component_from_min):
+                        mapped_component = float(component_to_min)
+                    else:
+                        t = (float(component_value) - float(component_from_min)) / (float(component_from_max) - float(component_from_min))
+                        mapped_component = float(component_to_min) + t * (float(component_to_max) - float(component_to_min))
+                    if bool(getattr(node, "clamp", True)):
+                        lo = min(float(component_to_min), float(component_to_max))
+                        hi = max(float(component_to_min), float(component_to_max))
+                        mapped_component = max(lo, min(hi, mapped_component))
+                    components.append(mapped_component)
+                self._set_scalar_vector_outputs(node, vector_value=Vector(tuple(components)))
+                return True
             value = self._input_float(node, "Value", 0.0)
             from_min = self._input_float(node, "From Min", 0.0)
             from_max = self._input_float(node, "From Max", 1.0)
@@ -494,7 +1076,7 @@ class RuntimeMathDataMixin:
             else:
                 t = (value - from_min) / (from_max - from_min)
                 mapped = to_min + t * (to_max - to_min)
-            if node.clamp:
+            if bool(getattr(node, "clamp", True)):
                 lo = min(to_min, to_max)
                 hi = max(to_min, to_max)
                 mapped = max(lo, min(hi, mapped))
@@ -524,6 +1106,13 @@ class RuntimeMathDataMixin:
                 rotated = vec
             else:
                 rotated = Matrix.Rotation(angle, 3, axis.normalized()) @ vec
+            self._set_scalar_vector_outputs(node, vector_value=rotated)
+            return True
+
+        if node_type == "AFNodeRotateVector":
+            vec = self._input_vector(node, "Vector")
+            rotation = self._input_rotation(node, "Rotation")
+            rotated = rotation @ vec
             self._set_scalar_vector_outputs(node, vector_value=rotated)
             return True
 
@@ -658,6 +1247,18 @@ class RuntimeMathDataMixin:
             return True
 
         if node_type == "AFNodeMatrixMultiply":
+            matrix_a_missing = self._matrix_input_has_no_effective_source(node, "Matrix A")
+            matrix_b_missing = self._matrix_input_has_no_effective_source(node, "Matrix B")
+            if matrix_b_missing and not matrix_a_missing:
+                linked_value = self._get_linked_output(node, "Matrix A", "matrix_value")
+                if linked_value is not None:
+                    self._set_output(node, "matrix_value", linked_value)
+                    return True
+            if matrix_a_missing and not matrix_b_missing:
+                linked_value = self._get_linked_output(node, "Matrix B", "matrix_value")
+                if linked_value is not None:
+                    self._set_output(node, "matrix_value", linked_value)
+                    return True
             matrix_a = self._input_matrix(node, "Matrix A")
             matrix_b = self._input_matrix(node, "Matrix B")
             self._set_output(node, "matrix_value", _matrix_to_payload(matrix_a @ matrix_b))

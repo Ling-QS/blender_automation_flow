@@ -537,6 +537,39 @@ def _cached_store_package_chip_data(runner, node, root_tree, group_path):
     return _chip_cached_value(cache_key, _compute)
 
 
+def _resolve_read_property_package_chip_target(node):
+    if node is None or getattr(node, "bl_idname", "") != "AFNodeReadPropertyPackage":
+        return None
+    node_tree = getattr(node, "id_data", None)
+    if node_tree is None or getattr(node_tree, "bl_idname", "") != "AFNodeTreeType":
+        return None
+
+    target_store_id = str(getattr(node, "target_store_id", "") or "").strip()
+    if target_store_id == "0":
+        target_store_id = ""
+    target_store_node_name = str(getattr(node, "target_store_node_name", "") or "").strip()
+
+    if target_store_id:
+        for candidate in getattr(node_tree, "nodes", []):
+            if str(getattr(candidate, "bl_idname", "") or "") != "AFNodeStorePropertyPackage":
+                continue
+            if str(getattr(candidate, "store_asset_id", "") or "").strip() == target_store_id:
+                return candidate
+
+    if target_store_node_name:
+        candidate = getattr(node_tree, "nodes", {}).get(target_store_node_name)
+        if candidate is not None and str(getattr(candidate, "bl_idname", "") or "") == "AFNodeStorePropertyPackage":
+            return candidate
+    return None
+
+
+def _cached_read_package_chip_data(runner, node, root_tree, group_path):
+    target_store_node = _resolve_read_property_package_chip_target(node)
+    if target_store_node is None:
+        return None
+    return _cached_store_package_chip_data(runner, target_store_node, root_tree, group_path)
+
+
 def _cached_group_output_chip_data(runner, group_node, output_socket, root_tree, group_path):
     cache_key = (
         "group_output_chip",
@@ -614,7 +647,10 @@ def _draw_property_package_backdrop_tags(node_tree):
     if not visible_nodes:
         return
     visible_node_types = {str(getattr(node, "bl_idname", "") or "") for node in visible_nodes}
-    has_visible_store_nodes = draw_stored_package_chips and "AFNodeStorePropertyPackage" in visible_node_types
+    has_visible_store_nodes = draw_stored_package_chips and (
+        "AFNodeStorePropertyPackage" in visible_node_types
+        or "AFNodeReadPropertyPackage" in visible_node_types
+    )
     has_visible_group_nodes = draw_group_output_package_chips and "AFNodeGroup" in visible_node_types
     need_runner_context = bool(has_visible_store_nodes or has_visible_group_nodes)
     root_tree = _node_editor_root_tree(bpy.context, node_tree) if need_runner_context else None
@@ -694,6 +730,18 @@ def _draw_property_package_backdrop_tags(node_tree):
                 if draw_stored_package_chips and node_type == "AFNodeStorePropertyPackage":
                     try:
                         chip_data = _cached_store_package_chip_data(runner, node, root_tree, group_path)
+                    except Exception:
+                        chip_data = None
+                    if not isinstance(chip_data, dict):
+                        continue
+                    chip_text = str(chip_data.get("chip_text", "") or "")
+                    palette = chip_data.get("palette", _store_chip_palette("STORE_AND_OUTPUT", False))
+                    _draw_top_status_chip_for_node(node, chip_text, palette, chip_scale, region, view2d, dimensions_cache, clip_cache)
+                    continue
+
+                if draw_stored_package_chips and node_type == "AFNodeReadPropertyPackage":
+                    try:
+                        chip_data = _cached_read_package_chip_data(runner, node, root_tree, group_path)
                     except Exception:
                         chip_data = None
                     if not isinstance(chip_data, dict):

@@ -4,7 +4,6 @@ from bpy.app.translations import pgettext_iface as iface_
 
 from ..node_system.socket_aliases import (
     PROPERTY_ASSIGNMENT_SOCKET_NAME,
-    PROPERTY_PACKAGE_SOCKET_NAME,
     canonical_socket_display_name,
 )
 
@@ -15,12 +14,19 @@ def build_property_data_helpers(
     PROPERTY_SOURCE_VALUE,
     _draw_compact_property_source,
     _find_single_from_input_socket,
-    _rebuild_sockets,
     _socket_signature,
+    _sync_node_sockets_in_place,
 ):
+    property_data_socket_sync_guard = set()
+
+    def _property_data_node_sync_key(node):
+        try:
+            return int(node.as_pointer()) if hasattr(node, "as_pointer") else id(node)
+        except Exception:
+            return id(node)
+
     def _draw_modifier_property_assignment_fields(layout, node, heading_text):
         del heading_text
-        name_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Name")
         filter_row = layout.row(align=True)
         filter_row.prop(node, "filter_by_type", text=iface_("Type"), toggle=True)
         filter_row.prop(node, "filter_by_name", text=iface_("Name"), toggle=True)
@@ -28,16 +34,7 @@ def build_property_data_helpers(
         if bool(getattr(node, "filter_by_type", False)):
             layout.prop(node, "modifier_type_filter", text="")
         if bool(getattr(node, "filter_by_name", False)):
-            row = layout.row(align=True)
-            split = row.split(factor=0.34, align=True)
-            mode_row = split.row(align=True)
-            mode_row.prop(node, "modifier_name_match_mode", text="")
-            value_row = split.row(align=True)
-            if name_socket is not None and hasattr(name_socket, "default_value"):
-                value_row.enabled = _find_single_from_input_socket(name_socket)[0] is None
-                value_row.prop(name_socket, "default_value", text="")
-            else:
-                value_row.label(text="")
+            layout.prop(node, "modifier_name_match_mode", text="")
 
     def _draw_object_display_property_assignment_fields(layout, node, heading_text):
         del layout, node, heading_text
@@ -78,12 +75,30 @@ def build_property_data_helpers(
         return None
 
     def _property_data_input_specs(node):
-        input_specs = [("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME)]
+        input_specs = []
         if getattr(node, "bl_idname", "") == "AFNodeModifierPropertyData":
             if bool(getattr(node, "filter_by_name", False)):
-                input_specs.append(("NodeSocketString", "Name"))
+                input_specs.append(("AFSocketString", "Name"))
             if bool(getattr(node, "filter_by_context", False)):
                 input_specs.append(("NodeSocketBool", "Context"))
+            input_specs.append(("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME))
+        else:
+            input_specs.append(("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME))
+        input_specs.extend(
+            (str(spec["socket_idname"]), str(spec["input_socket"]))
+            for spec in _property_data_field_specs(node)
+            if str(spec.get("input_socket", "") or "").strip() and str(spec.get("socket_idname", "") or "").strip()
+        )
+        return tuple(input_specs)
+
+    def _property_data_sync_input_specs(node):
+        input_specs = []
+        if getattr(node, "bl_idname", "") == "AFNodeModifierPropertyData":
+            input_specs.append(("AFSocketString", "Name"))
+            input_specs.append(("NodeSocketBool", "Context"))
+            input_specs.append(("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME))
+        else:
+            input_specs.append(("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME))
         input_specs.extend(
             (str(spec["socket_idname"]), str(spec["input_socket"]))
             for spec in _property_data_field_specs(node)
@@ -94,7 +109,7 @@ def build_property_data_helpers(
     def _property_data_context_output_specs(node):
         output_specs = []
         if getattr(node, "bl_idname", "") == "AFNodeModifierPropertyData":
-            output_specs.append(("NodeSocketString", "Name"))
+            output_specs.append(("AFSocketString", "Name"))
         output_specs.extend(
             (str(spec["socket_idname"]), str(spec["output_socket"]))
             for spec in _property_data_field_specs(node)
@@ -326,13 +341,23 @@ def build_property_data_helpers(
 
     def _property_data_visible_context_input_names(node):
         visible_names = set()
-        visible_names.add(PROPERTY_PACKAGE_SOCKET_NAME)
+        visible_names.add(PROPERTY_ASSIGNMENT_SOCKET_NAME)
         if str(getattr(node, "bl_idname", "") or "") == "AFNodeModifierPropertyData":
             if bool(getattr(node, "filter_by_name", False)):
                 visible_names.add("Name")
             if bool(getattr(node, "filter_by_context", False)):
                 visible_names.add("Context")
         return visible_names
+
+    def _modifier_property_aux_input_forced_hidden(node, socket_name):
+        if str(getattr(node, "bl_idname", "") or "") != "AFNodeModifierPropertyData":
+            return False
+        socket_name = str(socket_name or "")
+        if socket_name == "Name":
+            return not bool(getattr(node, "filter_by_name", False))
+        if socket_name == "Context":
+            return not bool(getattr(node, "filter_by_context", False))
+        return False
 
     def _property_data_context_output_names(node):
         output_names = {
@@ -355,7 +380,7 @@ def build_property_data_helpers(
             return visible_keys
 
         for _, socket_name in _property_data_input_specs(node):
-            if socket_name == PROPERTY_PACKAGE_SOCKET_NAME:
+            if socket_name == PROPERTY_ASSIGNMENT_SOCKET_NAME:
                 continue
             visible_keys.add(_property_data_socket_key(is_output=False, socket_name=socket_name))
         visible_keys.add(_property_data_socket_key(is_output=True, socket_name=PROPERTY_ASSIGNMENT_SOCKET_NAME))
@@ -393,7 +418,7 @@ def build_property_data_helpers(
         name_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Name")
         if name_socket is not None:
             try:
-                name_socket.hide_value = True
+                name_socket.hide_value = False
             except Exception:
                 pass
         context_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Context")
@@ -417,10 +442,10 @@ def build_property_data_helpers(
         for socket in getattr(node, "inputs", []):
             try:
                 socket_name = str(getattr(socket, "name", "") or "")
-                forced_hidden = False
-                if output_mode == "CONTEXT":
+                forced_hidden = _modifier_property_aux_input_forced_hidden(node, socket_name)
+                if not forced_hidden and output_mode == "CONTEXT":
                     forced_hidden = socket_name not in always_visible_context_input_names
-                elif socket_name == PROPERTY_PACKAGE_SOCKET_NAME:
+                elif not forced_hidden and socket_name == PROPERTY_ASSIGNMENT_SOCKET_NAME:
                     forced_hidden = True
                 socket_key = _property_data_socket_key(socket=socket)
                 manual_hidden = _property_data_manual_hidden_state(
@@ -487,51 +512,55 @@ def build_property_data_helpers(
             pass
 
     def _sync_property_data_sockets(node, manual_hidden_keys=None):
-        manual_hidden_keys = _sync_ready_property_data_manual_hidden_keys(node, manual_hidden_keys)
-        input_specs = (
-            _OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS
-            if getattr(node, "bl_idname", "") == "AFNodeObjectTransformPropertyData"
-            else _property_data_input_specs(node)
-        )
-        output_specs = _property_data_output_specs(node)
-        include_default_values = getattr(node, "bl_idname", "") != "AFNodeObjectTransformPropertyData"
-        input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
-        output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
-        if input_signature != input_specs or output_signature != output_specs:
-            suspend_runtime_sync = None
-            resume_runtime_sync = None
-            try:
-                from ..node_system.tree import resume_runtime_sync, suspend_runtime_sync
-            except Exception:
-                pass
-            if suspend_runtime_sync is not None:
-                suspend_runtime_sync()
-            try:
-                _rebuild_sockets(
-                    node,
-                    input_specs,
-                    output_specs,
-                    include_default_values=include_default_values,
-                    restore_hide_state=False,
-                )
-            finally:
-                if resume_runtime_sync is not None:
-                    resume_runtime_sync()
-        _configure_modifier_property_data_input_sockets(node)
-        if getattr(node, "bl_idname", "") == "AFNodeObjectTransformPropertyData":
-            _initialize_object_transform_property_input_defaults(node)
-        _apply_property_data_socket_visibility(node, manual_hidden_keys=manual_hidden_keys)
-        _store_property_data_last_output_mode(node, getattr(node, "output_mode", "ASSIGNMENT"))
+        node_key = _property_data_node_sync_key(node)
+        if node_key in property_data_socket_sync_guard:
+            return
+        property_data_socket_sync_guard.add(node_key)
+        try:
+            manual_hidden_keys = _sync_ready_property_data_manual_hidden_keys(node, manual_hidden_keys)
+            input_specs = (
+                _OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS
+                if getattr(node, "bl_idname", "") == "AFNodeObjectTransformPropertyData"
+                else _property_data_sync_input_specs(node)
+            )
+            output_specs = _property_data_output_specs(node)
+            input_signature = tuple(_socket_signature(socket) for socket in getattr(node, "inputs", []))
+            output_signature = tuple(_socket_signature(socket) for socket in getattr(node, "outputs", []))
+            if input_signature != input_specs or output_signature != output_specs:
+                suspend_runtime_sync = None
+                resume_runtime_sync = None
+                try:
+                    from ..node_system.tree import resume_runtime_sync, suspend_runtime_sync
+                except Exception:
+                    pass
+                if suspend_runtime_sync is not None:
+                    suspend_runtime_sync()
+                try:
+                    _sync_node_sockets_in_place(
+                        node,
+                        input_specs,
+                        output_specs,
+                    )
+                finally:
+                    if resume_runtime_sync is not None:
+                        resume_runtime_sync()
+            _configure_modifier_property_data_input_sockets(node)
+            if getattr(node, "bl_idname", "") == "AFNodeObjectTransformPropertyData":
+                _initialize_object_transform_property_input_defaults(node)
+            _apply_property_data_socket_visibility(node, manual_hidden_keys=manual_hidden_keys)
+            _store_property_data_last_output_mode(node, getattr(node, "output_mode", "ASSIGNMENT"))
+        finally:
+            property_data_socket_sync_guard.discard(node_key)
 
     def _sync_property_data_node_sockets(node, manual_hidden_keys=None):
         _sync_property_data_sockets(node, manual_hidden_keys=manual_hidden_keys)
 
     _OBJECT_TRANSFORM_PROPERTY_INPUT_SPECS = (
-        ("AFSocketPropertyPackage", PROPERTY_PACKAGE_SOCKET_NAME),
+        ("AFSocketPropertyAssignment", PROPERTY_ASSIGNMENT_SOCKET_NAME),
         ("AFSocketVectorValue", "Location"),
         ("AFSocketRotationValue", "Rotation"),
-        ("AFSocketRotationMode", "Rotation Mode"),
         ("AFSocketVectorValue", "Scale"),
+        ("AFSocketRotationMode", "Rotation Mode"),
     )
 
     def _initialize_object_transform_property_input_defaults(node):
@@ -560,6 +589,9 @@ def build_property_data_helpers(
 
     def _property_data_update_socket_layout(self, _context):
         if getattr(self, "bl_idname", "") not in PROPERTY_DATA_FIELD_SPECS:
+            return
+        node_key = _property_data_node_sync_key(self)
+        if node_key in property_data_socket_sync_guard:
             return
         current_output_mode = str(getattr(self, "output_mode", "ASSIGNMENT") or "ASSIGNMENT")
         previous_output_mode = _load_property_data_last_output_mode(self)

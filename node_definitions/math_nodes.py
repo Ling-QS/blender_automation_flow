@@ -14,6 +14,7 @@ def build_math_node_classes(
     INDEX_SWITCH_MODE_ITEMS,
     INTEGER_MATH_OPERATION_ITEMS,
     MIX_MODE_ITEMS,
+    MAP_RANGE_MODE_ITEMS,
     RANDOM_TYPE_ITEMS,
     ROTATION_AXIS_ITEMS,
     ROTATION_PIVOT_AXIS_ITEMS,
@@ -24,12 +25,265 @@ def build_math_node_classes(
     VECTOR_COMPONENT_MODE_ITEMS,
     VECTOR_MATH_OPERATION_ITEMS,
     _enum_property_label,
-    _rebuild_sockets,
     _set_default_node_width,
     _set_node_color,
     _switch_socket_idname_for_mode,
+    _sync_node_sockets_in_place,
     _sync_index_switch_sockets,
 ):
+    COMPARE_EPSILON_DEFAULT = 1e-6
+    COMPARE_EPSILON_STORAGE_KEY = "af_compare_epsilon_default"
+
+    def _sync_compare_node_sockets(node):
+        mode = str(getattr(node, "mode", "FLOAT") or "FLOAT")
+        operation = str(getattr(node, "operation", "EQUAL") or "EQUAL")
+        vector_mode = str(getattr(node, "vector_mode", "ELEMENT") or "ELEMENT")
+        previous_epsilon_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Epsilon")
+        stored_epsilon = COMPARE_EPSILON_DEFAULT
+        if previous_epsilon_socket is not None and hasattr(previous_epsilon_socket, "default_value"):
+            try:
+                stored_epsilon = max(0.0, float(getattr(previous_epsilon_socket, "default_value", COMPARE_EPSILON_DEFAULT)))
+            except Exception:
+                stored_epsilon = COMPARE_EPSILON_DEFAULT
+        else:
+            try:
+                stored_epsilon = max(0.0, float(node.get(COMPARE_EPSILON_STORAGE_KEY, COMPARE_EPSILON_DEFAULT)))
+            except Exception:
+                stored_epsilon = COMPARE_EPSILON_DEFAULT
+        try:
+            node[COMPARE_EPSILON_STORAGE_KEY] = stored_epsilon
+        except Exception:
+            pass
+
+        if mode == "VECTOR":
+            input_specs = [("NodeSocketVector", "A"), ("NodeSocketVector", "B")]
+            if vector_mode == "DOT_PRODUCT":
+                input_specs.append(("NodeSocketFloat", "C"))
+            elif vector_mode == "DIRECTION":
+                input_specs.append(("NodeSocketFloat", "Angle"))
+            input_specs.append(("NodeSocketFloat", "Epsilon"))
+        elif mode == "INTEGER":
+            input_specs = [("NodeSocketInt", "A"), ("NodeSocketInt", "B")]
+        elif mode == "STRING":
+            input_specs = [("AFSocketString", "A"), ("AFSocketString", "B")]
+        else:
+            input_specs = [("NodeSocketFloat", "A"), ("NodeSocketFloat", "B")]
+            if operation in {"EQUAL", "NOT_EQUAL"}:
+                input_specs.append(("NodeSocketFloat", "Epsilon"))
+
+        sync_result = _sync_node_sockets_in_place(node, input_specs, [("NodeSocketBool", "Result")])
+
+        epsilon_socket = getattr(getattr(node, "inputs", None), "get", lambda _name: None)("Epsilon")
+        if (
+            epsilon_socket is not None
+            and hasattr(epsilon_socket, "default_value")
+            and "Epsilon" in set(sync_result.get("created_input_names", set()) or set())
+        ):
+            try:
+                epsilon_socket.default_value = stored_epsilon
+            except Exception:
+                pass
+
+    def _sync_mix_node_sockets(node):
+        mode = str(getattr(node, "mode", "FLOAT") or "FLOAT")
+        if mode == "VECTOR":
+            input_specs = [("NodeSocketFloat", "Factor"), ("NodeSocketVector", "A"), ("NodeSocketVector", "B")]
+            output_specs = [("NodeSocketVector", "Result")]
+        elif mode == "ROTATION":
+            input_specs = [("NodeSocketFloat", "Factor"), ("NodeSocketRotation", "A"), ("NodeSocketRotation", "B")]
+            output_specs = [("NodeSocketRotation", "Result")]
+        else:
+            input_specs = [("NodeSocketFloat", "Factor"), ("NodeSocketFloat", "A"), ("NodeSocketFloat", "B")]
+            output_specs = [("NodeSocketFloat", "Result")]
+        _sync_node_sockets_in_place(node, input_specs, output_specs)
+
+    def _sync_map_range_node_sockets(node):
+        mode = str(getattr(node, "mode", "FLOAT") or "FLOAT")
+        if mode == "VECTOR":
+            input_specs = [
+                ("NodeSocketVector", "Value"),
+                ("NodeSocketVector", "From Min"),
+                ("NodeSocketVector", "From Max"),
+                ("NodeSocketVector", "To Min"),
+                ("NodeSocketVector", "To Max"),
+            ]
+            output_specs = [("NodeSocketVector", "Result")]
+        else:
+            input_specs = [
+                ("NodeSocketFloat", "Value"),
+                ("NodeSocketFloat", "From Min"),
+                ("NodeSocketFloat", "From Max"),
+                ("NodeSocketFloat", "To Min"),
+                ("NodeSocketFloat", "To Max"),
+            ]
+            output_specs = [("NodeSocketFloat", "Result")]
+        _sync_node_sockets_in_place(node, input_specs, output_specs)
+
+    def _sync_switch_node_sockets(node):
+        socket_idname = _switch_socket_idname_for_mode(getattr(node, "mode", "FLOAT"))
+        _sync_node_sockets_in_place(
+            node,
+            [("NodeSocketBool", "Switch"), (socket_idname, "False"), (socket_idname, "True")],
+            [(socket_idname, "Output")],
+        )
+
+    def _sync_convert_value_node_sockets(node):
+        input_socket_type, output_socket_type = CONVERSION_SOCKET_MAP[getattr(node, "conversion_mode", "FLOAT_TO_INT")]
+        _sync_node_sockets_in_place(node, [(input_socket_type, "Value")], [(output_socket_type, "Value")])
+
+    def _sync_math_node_sockets(node):
+        operation = str(getattr(node, "operation", "ADD") or "ADD")
+        unary_input_names = {
+            "SQRT": ("Value",),
+            "INVERSE_SQRT": ("Value",),
+            "ABSOLUTE": ("Value",),
+            "EXPONENT": ("Value",),
+            "SIGN": ("Value",),
+            "ROUND": ("Value",),
+            "FLOOR": ("Value",),
+            "CEIL": ("Value",),
+            "TRUNC": ("Value",),
+            "FRACT": ("Value",),
+            "SINE": ("Value",),
+            "COSINE": ("Value",),
+            "TANGENT": ("Value",),
+            "ARCSINE": ("Value",),
+            "ARCCOSINE": ("Value",),
+            "ARCTANGENT": ("Value",),
+            "SINH": ("Value",),
+            "COSH": ("Value",),
+            "TANH": ("Value",),
+            "RADIANS": ("Value",),
+            "DEGREES": ("Value",),
+        }
+        binary_input_names = {
+            "POWER": ("Base", "Exponent"),
+            "LOGARITHM": ("Value", "Base"),
+            "LESS_THAN": ("Value", "Threshold"),
+            "GREATER_THAN": ("Value", "Threshold"),
+            "SNAP": ("Value", "Increment"),
+            "PINGPONG": ("Value", "Scale"),
+        }
+        ternary_input_names = {
+            "MULTIPLY_ADD": ("Value", "Multiplier", "Addend"),
+            "COMPARE": ("A", "B", "Epsilon"),
+            "SMOOTH_MIN": ("A", "B", "Distance"),
+            "SMOOTH_MAX": ("A", "B", "Distance"),
+            "WRAP": ("Value", "Min", "Max"),
+        }
+
+        if operation in unary_input_names:
+            input_specs = [("NodeSocketFloat", name) for name in unary_input_names[operation]]
+        elif operation in ternary_input_names:
+            input_specs = [("NodeSocketFloat", name) for name in ternary_input_names[operation]]
+        else:
+            input_names = binary_input_names.get(operation, ("A", "B"))
+            input_specs = [("NodeSocketFloat", name) for name in input_names]
+        _sync_node_sockets_in_place(node, input_specs, [("NodeSocketFloat", "Value")])
+
+    def _sync_integer_math_node_sockets(node):
+        operation = str(getattr(node, "operation", "ADD") or "ADD")
+        if operation in {"ABSOLUTE", "NEGATE", "SIGN"}:
+            input_specs = [("NodeSocketInt", "Value")]
+        elif operation == "MULTIPLY_ADD":
+            input_specs = [
+                ("NodeSocketInt", "Value"),
+                ("NodeSocketInt", "Multiplier"),
+                ("NodeSocketInt", "Addend"),
+            ]
+        elif operation == "POWER":
+            input_specs = [("NodeSocketInt", "Base"), ("NodeSocketInt", "Exponent")]
+        else:
+            input_specs = [("NodeSocketInt", "A"), ("NodeSocketInt", "B")]
+        _sync_node_sockets_in_place(node, input_specs, [("NodeSocketInt", "Value")])
+
+    def _sync_boolean_math_node_sockets(node):
+        operation = str(getattr(node, "operation", "AND") or "AND")
+        if operation == "NOT":
+            _sync_node_sockets_in_place(node, [("NodeSocketBool", "Boolean")], [("NodeSocketBool", "Boolean")])
+            return
+        _sync_node_sockets_in_place(node, [("NodeSocketBool", "A"), ("NodeSocketBool", "B")], [("NodeSocketBool", "Boolean")])
+
+    def _sync_vector_math_node_sockets(node):
+        operation = str(getattr(node, "operation", "ADD") or "ADD")
+        if operation == "LENGTH":
+            _sync_node_sockets_in_place(node, [("NodeSocketVector", "Vector")], [("NodeSocketFloat", "Value")])
+            return
+        if operation in {"NORMALIZE", "ABSOLUTE", "SIGN", "ROUND", "FLOOR", "CEIL", "FRACTION", "SINE", "COSINE", "TANGENT"}:
+            _sync_node_sockets_in_place(node, [("NodeSocketVector", "Vector")], [("NodeSocketVector", "Vector")])
+            return
+        if operation == "SCALE":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketFloat", "Scale")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation in {"DISTANCE", "DOT_PRODUCT"}:
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "A"), ("NodeSocketVector", "B")],
+                [("NodeSocketFloat", "Value")],
+            )
+            return
+        if operation == "PROJECT":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "On")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "REFLECT":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Normal")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "REFRACT":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Normal"), ("NodeSocketFloat", "IOR")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "FACEFORWARD":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Incident"), ("NodeSocketVector", "Reference")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "MULTIPLY_ADD":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Multiplier"), ("NodeSocketVector", "Addend")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "POWER":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Base"), ("NodeSocketVector", "Exponent")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "WRAP":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Min"), ("NodeSocketVector", "Max")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        if operation == "SNAP":
+            _sync_node_sockets_in_place(
+                node,
+                [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Increment")],
+                [("NodeSocketVector", "Vector")],
+            )
+            return
+        _sync_node_sockets_in_place(node, [("NodeSocketVector", "A"), ("NodeSocketVector", "B")], [("NodeSocketVector", "Vector")])
+
     class AFNodeMath(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeMath"
         bl_label = "Math"
@@ -41,6 +295,7 @@ def build_math_node_classes(
             default="ADD",
             update=lambda self, context: self._sync_sockets(),
         )
+        use_clamp: bpy.props.BoolProperty(name="Clamp", default=False)
 
         def init(self, context):
             self._sync_sockets()
@@ -48,37 +303,13 @@ def build_math_node_classes(
 
         def draw_buttons(self, context, layout):
             layout.prop(self, "operation", text="")
+            layout.prop(self, "use_clamp")
 
         def draw_label(self):
             return _enum_property_label(self, "operation", self.bl_label)
 
         def _sync_sockets(self):
-            unary_ops = {"ABSOLUTE", "SIGN", "FLOOR", "CEIL", "ROUND", "FRACT"}
-            if self.operation in unary_ops:
-                _rebuild_sockets(self, [("NodeSocketFloat", "Value")], [("NodeSocketFloat", "Value")])
-                return
-            if self.operation == "WRAP":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketFloat", "Value"), ("NodeSocketFloat", "Min"), ("NodeSocketFloat", "Max")],
-                    [("NodeSocketFloat", "Value")],
-                )
-                return
-            if self.operation == "SNAP":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketFloat", "Value"), ("NodeSocketFloat", "Increment")],
-                    [("NodeSocketFloat", "Value")],
-                )
-                return
-            if self.operation == "PINGPONG":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketFloat", "Value"), ("NodeSocketFloat", "Scale")],
-                    [("NodeSocketFloat", "Value")],
-                )
-                return
-            _rebuild_sockets(self, [("NodeSocketFloat", "A"), ("NodeSocketFloat", "B")], [("NodeSocketFloat", "Value")])
+            _sync_math_node_sockets(self)
 
     class AFNodeIntegerMath(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeIntegerMath"
@@ -103,10 +334,7 @@ def build_math_node_classes(
             return _enum_property_label(self, "operation", self.bl_label)
 
         def _sync_sockets(self):
-            if self.operation in {"ABSOLUTE", "SIGN"}:
-                _rebuild_sockets(self, [("NodeSocketInt", "Value")], [("NodeSocketInt", "Value")])
-                return
-            _rebuild_sockets(self, [("NodeSocketInt", "A"), ("NodeSocketInt", "B")], [("NodeSocketInt", "Value")])
+            _sync_integer_math_node_sockets(self)
 
     class AFNodeBooleanMath(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeBooleanMath"
@@ -131,10 +359,7 @@ def build_math_node_classes(
             return _enum_property_label(self, "operation", self.bl_label)
 
         def _sync_sockets(self):
-            if self.operation == "NOT":
-                _rebuild_sockets(self, [("NodeSocketBool", "Boolean")], [("NodeSocketBool", "Boolean")])
-                return
-            _rebuild_sockets(self, [("NodeSocketBool", "A"), ("NodeSocketBool", "B")], [("NodeSocketBool", "Boolean")])
+            _sync_boolean_math_node_sockets(self)
 
     class AFNodeVectorMath(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeVectorMath"
@@ -159,40 +384,7 @@ def build_math_node_classes(
             return _enum_property_label(self, "operation", self.bl_label)
 
         def _sync_sockets(self):
-            op = self.operation
-            if op in {"LENGTH", "NORMALIZE"}:
-                out_socket = ("NodeSocketFloat", "Value") if op == "LENGTH" else ("NodeSocketVector", "Vector")
-                _rebuild_sockets(self, [("NodeSocketVector", "Vector")], [out_socket])
-                return
-            if op == "SCALE":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketVector", "Vector"), ("NodeSocketFloat", "Scale")],
-                    [("NodeSocketVector", "Vector")],
-                )
-                return
-            if op in {"DISTANCE", "DOT_PRODUCT"}:
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketVector", "A"), ("NodeSocketVector", "B")],
-                    [("NodeSocketFloat", "Value")],
-                )
-                return
-            if op == "PROJECT":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketVector", "Vector"), ("NodeSocketVector", "On")],
-                    [("NodeSocketVector", "Vector")],
-                )
-                return
-            if op == "REFLECT":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketVector", "Vector"), ("NodeSocketVector", "Normal")],
-                    [("NodeSocketVector", "Vector")],
-                )
-                return
-            _rebuild_sockets(self, [("NodeSocketVector", "A"), ("NodeSocketVector", "B")], [("NodeSocketVector", "Vector")])
+            _sync_vector_math_node_sockets(self)
 
     class AFNodeMix(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeMix"
@@ -205,6 +397,7 @@ def build_math_node_classes(
             default="FLOAT",
             update=lambda self, context: self._sync_sockets(),
         )
+        clamp_factor: bpy.props.BoolProperty(name="Clamp Factor", default=True)
 
         def init(self, context):
             self._sync_sockets()
@@ -212,20 +405,10 @@ def build_math_node_classes(
 
         def draw_buttons(self, context, layout):
             layout.prop(self, "mode", text="")
+            layout.prop(self, "clamp_factor")
 
         def _sync_sockets(self):
-            if self.mode == "VECTOR":
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketFloat", "Factor"), ("NodeSocketVector", "A"), ("NodeSocketVector", "B")],
-                    [("NodeSocketVector", "Result")],
-                )
-            else:
-                _rebuild_sockets(
-                    self,
-                    [("NodeSocketFloat", "Factor"), ("NodeSocketFloat", "A"), ("NodeSocketFloat", "B")],
-                    [("NodeSocketFloat", "Result")],
-                )
+            _sync_mix_node_sockets(self)
 
     class AFNodeSwitch(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeSwitch"
@@ -247,12 +430,7 @@ def build_math_node_classes(
             layout.prop(self, "mode", text="")
 
         def _sync_sockets(self):
-            socket_idname = _switch_socket_idname_for_mode(self.mode)
-            _rebuild_sockets(
-                self,
-                [("NodeSocketBool", "Switch"), (socket_idname, "False"), (socket_idname, "True")],
-                [(socket_idname, "Output")],
-            )
+            _sync_switch_node_sockets(self)
 
     class AFNodeIndexSwitch(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeIndexSwitch"
@@ -292,49 +470,41 @@ def build_math_node_classes(
             default="FLOAT",
             update=lambda self, context: self._sync_sockets(),
         )
-        operation: bpy.props.EnumProperty(name="Operation", items=COMPARE_OPERATION_ITEMS, default="EQUAL")
-        vector_mode: bpy.props.EnumProperty(name="Vector Mode", items=COMPARE_VECTOR_MODE_ITEMS, default="DISTANCE")
+        operation: bpy.props.EnumProperty(
+            name="Operation",
+            items=COMPARE_OPERATION_ITEMS,
+            default="EQUAL",
+            update=lambda self, context: self._sync_sockets(),
+        )
+        string_operation: bpy.props.EnumProperty(name="String Operation", items=STRING_COMPARE_OPERATION_ITEMS, default="EQUAL")
+        vector_mode: bpy.props.EnumProperty(
+            name="Vector Mode",
+            items=COMPARE_VECTOR_MODE_ITEMS,
+            default="ELEMENT",
+            update=lambda self, context: self._sync_sockets(),
+        )
         threshold: bpy.props.FloatProperty(name="Threshold", default=0.001, min=0.0)
-        epsilon: bpy.props.FloatProperty(name="Epsilon", default=1e-6, min=0.0)
 
         def init(self, context):
             self._sync_sockets()
             _set_node_color(self, "CONVERTER")
 
         def draw_buttons(self, context, layout):
-            layout.prop(self, "mode")
+            layout.prop(self, "mode", text="")
             if self.mode == "VECTOR":
-                layout.prop(self, "vector_mode")
-                layout.prop(self, "threshold")
-            layout.prop(self, "operation", text="")
-            layout.prop(self, "epsilon")
-
-        def _sync_sockets(self):
-            if self.mode == "VECTOR":
-                _rebuild_sockets(self, [("NodeSocketVector", "A"), ("NodeSocketVector", "B")], [("NodeSocketBool", "Result")])
-            else:
-                _rebuild_sockets(self, [("NodeSocketFloat", "A"), ("NodeSocketFloat", "B")], [("NodeSocketBool", "Result")])
-
-    class AFNodeStringCompare(AFBaseNode, bpy.types.Node):
-        bl_idname = "AFNodeStringCompare"
-        bl_label = "String Compare"
-        bl_icon = "BLANK1"
-
-        operation: bpy.props.EnumProperty(name="Operation", items=STRING_COMPARE_OPERATION_ITEMS, default="EQUAL")
-
-        def init(self, context):
-            del context
-            self.inputs.new("NodeSocketString", "A")
-            self.inputs.new("NodeSocketString", "B")
-            self.outputs.new("NodeSocketBool", "Result")
-            _set_node_color(self, "CONVERTER")
-
-        def draw_buttons(self, context, layout):
-            del context
+                layout.prop(self, "vector_mode", text="")
+            if self.mode == "STRING":
+                layout.prop(self, "string_operation", text="")
+                return
             layout.prop(self, "operation", text="")
 
         def draw_label(self):
+            if self.mode == "STRING":
+                return _enum_property_label(self, "string_operation", self.bl_label)
             return _enum_property_label(self, "operation", self.bl_label)
+
+        def _sync_sockets(self):
+            _sync_compare_node_sockets(self)
 
     class AFNodeConvertValue(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeConvertValue"
@@ -367,8 +537,7 @@ def build_math_node_classes(
                 layout.prop(self, "epsilon")
 
         def _sync_sockets(self):
-            input_socket_type, output_socket_type = CONVERSION_SOCKET_MAP[self.conversion_mode]
-            _rebuild_sockets(self, [(input_socket_type, "Value")], [(output_socket_type, "Value")])
+            _sync_convert_value_node_sockets(self)
 
     class AFNodeClamp(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeClamp"
@@ -387,19 +556,24 @@ def build_math_node_classes(
         bl_label = "Map Range"
         bl_icon = "BLANK1"
 
-        clamp: bpy.props.BoolProperty(name="Clamp", default=False)
+        mode: bpy.props.EnumProperty(
+            name="Mode",
+            items=MAP_RANGE_MODE_ITEMS,
+            default="FLOAT",
+            update=lambda self, context: self._sync_sockets(),
+        )
+        clamp: bpy.props.BoolProperty(name="Clamp", default=True)
 
         def init(self, context):
-            self.inputs.new("NodeSocketFloat", "Value")
-            self.inputs.new("NodeSocketFloat", "From Min")
-            self.inputs.new("NodeSocketFloat", "From Max")
-            self.inputs.new("NodeSocketFloat", "To Min")
-            self.inputs.new("NodeSocketFloat", "To Max")
-            self.outputs.new("NodeSocketFloat", "Result")
+            self._sync_sockets()
             _set_node_color(self, "CONVERTER")
 
         def draw_buttons(self, context, layout):
+            layout.prop(self, "mode", text="")
             layout.prop(self, "clamp")
+
+        def _sync_sockets(self):
+            _sync_map_range_node_sockets(self)
 
     class AFNodeCombineVector(AFBaseNode, bpy.types.Node):
         bl_idname = "AFNodeCombineVector"
@@ -434,6 +608,18 @@ def build_math_node_classes(
             self.inputs.new("NodeSocketVector", "Vector")
             self.inputs.new("NodeSocketVector", "Axis")
             self.inputs.new("NodeSocketFloat", "Angle")
+            self.outputs.new("NodeSocketVector", "Vector")
+            _set_node_color(self, "VECTOR")
+
+    class AFNodeRotateVector(AFBaseNode, bpy.types.Node):
+        bl_idname = "AFNodeRotateVector"
+        bl_label = "Rotate Vector"
+        bl_icon = "BLANK1"
+
+        def init(self, context):
+            del context
+            self.inputs.new("NodeSocketVector", "Vector")
+            self.inputs.new("NodeSocketRotation", "Rotation")
             self.outputs.new("NodeSocketVector", "Vector")
             _set_node_color(self, "VECTOR")
 
@@ -602,7 +788,7 @@ def build_math_node_classes(
 
         def init(self, context):
             del context
-            _rebuild_sockets(self, _matrix_input_specs(), [("NodeSocketMatrix", "Matrix")])
+            _sync_node_sockets_in_place(self, _matrix_input_specs(), [("NodeSocketMatrix", "Matrix")])
             _set_default_node_width(self, multiplier=(4.0 / 3.0))
             _set_node_color(self, "CONVERTER")
 
@@ -613,7 +799,7 @@ def build_math_node_classes(
 
         def init(self, context):
             del context
-            _rebuild_sockets(self, [("NodeSocketMatrix", "Matrix")], _matrix_output_specs())
+            _sync_node_sockets_in_place(self, [("NodeSocketMatrix", "Matrix")], _matrix_output_specs())
             _set_default_node_width(self, multiplier=(4.0 / 3.0))
             _set_node_color(self, "CONVERTER")
 
@@ -762,19 +948,19 @@ def build_math_node_classes(
 
         def _sync_sockets(self):
             if self.value_type == "VECTOR":
-                _rebuild_sockets(
+                _sync_node_sockets_in_place(
                     self,
                     [("NodeSocketInt", "Seed"), ("NodeSocketVector", "Min"), ("NodeSocketVector", "Max")],
                     [("NodeSocketVector", "Value")],
                 )
             elif self.value_type == "BOOLEAN":
-                _rebuild_sockets(
+                _sync_node_sockets_in_place(
                     self,
                     [("NodeSocketInt", "Seed")],
                     [("NodeSocketBool", "Value")],
                 )
             else:
-                _rebuild_sockets(
+                _sync_node_sockets_in_place(
                     self,
                     [("NodeSocketInt", "Seed"), ("NodeSocketFloat", "Min"), ("NodeSocketFloat", "Max")],
                     [("NodeSocketFloat", "Value")],
@@ -789,13 +975,13 @@ def build_math_node_classes(
         "AFNodeSwitch": AFNodeSwitch,
         "AFNodeIndexSwitch": AFNodeIndexSwitch,
         "AFNodeCompare": AFNodeCompare,
-        "AFNodeStringCompare": AFNodeStringCompare,
         "AFNodeConvertValue": AFNodeConvertValue,
         "AFNodeClamp": AFNodeClamp,
         "AFNodeMapRange": AFNodeMapRange,
         "AFNodeCombineVector": AFNodeCombineVector,
         "AFNodeSeparateVector": AFNodeSeparateVector,
         "AFNodeVectorRotate": AFNodeVectorRotate,
+        "AFNodeRotateVector": AFNodeRotateVector,
         "AFNodeEulerToRotation": AFNodeEulerToRotation,
         "AFNodeQuaternionToRotation": AFNodeQuaternionToRotation,
         "AFNodeAxisAngleToRotation": AFNodeAxisAngleToRotation,

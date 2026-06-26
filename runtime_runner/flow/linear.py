@@ -1,42 +1,66 @@
 import bpy
 
 from ...runtime_core.constants import FlowExecutionError, TASK_KIND_PROPERTY_PACKAGE_BAKE, _enrich_flow_error_context
-from ...runtime_flow.helpers import _find_single_from_input_socket, _first_output_node
+from ...runtime_flow.helpers import (
+    _find_single_from_input_socket,
+    _first_output_node,
+    _node_bl_idname,
+    _node_name,
+    _node_tree_name,
+)
+
+
+def _safe_node_bool_attr(node, attr_name, default=False):
+    if node is None:
+        return bool(default)
+    try:
+        return bool(getattr(node, attr_name, default))
+    except Exception:
+        return bool(default)
+
+
+def _safe_socket_links_present(socket):
+    if socket is None:
+        return False
+    try:
+        return bool(getattr(socket, "links", None))
+    except Exception:
+        return False
 
 
 class RuntimeLinearFlowMixin:
     def _find_start_node(self):
-        start_nodes = [n for n in self.node_tree.nodes if n.bl_idname == "AFNodeStart"]
+        start_nodes = [n for n in self.node_tree.nodes if _node_bl_idname(n) == "AFNodeStart"]
         if not start_nodes:
             raise FlowExecutionError("AF_E009", "Flow must contain at least one Start node")
         if self.start_node_name:
             start_node = self.node_tree.nodes.get(self.start_node_name)
-            if start_node is None or getattr(start_node, "bl_idname", "") != "AFNodeStart":
+            if start_node is None or _node_bl_idname(start_node) != "AFNodeStart":
                 raise FlowExecutionError("AF_E009", f"Start node '{self.start_node_name}' was not found")
             return start_node
-        active_start_nodes = [node for node in start_nodes if bool(getattr(node, "is_active_start", True))]
+        active_start_nodes = [node for node in start_nodes if _safe_node_bool_attr(node, "is_active_start", True)]
         if len(active_start_nodes) != 1:
             raise FlowExecutionError("AF_E009", "Flow must contain exactly one enabled Start node")
         return active_start_nodes[0]
 
     def _is_executable_flow_entry(self, entry):
         node = entry.get("node") if isinstance(entry, dict) else None
-        node_type = str(getattr(node, "bl_idname", "") or "")
+        node_type = _node_bl_idname(node)
         return node is not None and node_type not in {"AFNodeGroup", "NodeGroupOutput"}
 
     def _compile_linear_flow(self):
         start = self._find_start_node()
         raw_entries = self._collect_linear_flow_entries(start, {"AFNodeEnd"}, [], set())
-        if not raw_entries or getattr(raw_entries[-1].get("node"), "bl_idname", "") != "AFNodeEnd":
+        if not raw_entries or _node_bl_idname(raw_entries[-1].get("node")) != "AFNodeEnd":
             raise FlowExecutionError("AF_E009", "Start node cannot reach End node")
         flow_entries = [entry for entry in raw_entries if self._is_executable_flow_entry(entry)]
         self.flow_repeat_pairs, total_steps = self._compile_repeat_metadata(
             flow_entries,
-            start.name,
+            _node_name(start),
             lambda entry: self._flow_node_step_cost(entry["node"]),
         )
-        self.flow_subflow_plans, subflow_steps = self._compile_subflow_metadata(flow_entries, start.name)
-        self.flow_branch_plans, branch_steps = self._compile_branch_metadata(flow_entries, start.name)
+        self.flow_subflow_plans, subflow_steps = self._compile_subflow_metadata(flow_entries, _node_name(start))
+        self.flow_branch_plans, branch_steps = self._compile_branch_metadata(flow_entries, _node_name(start))
         self.nodes_in_order = [entry["node"] for entry in flow_entries]
         self.node_group_paths_in_order = [
             [dict(item) for item in list(entry.get("group_path", []) or []) if isinstance(item, dict)]
@@ -49,12 +73,12 @@ class RuntimeLinearFlowMixin:
 
     def _collect_group_linear_flow_entries(self, group_node, parent_group_path=None, visited=None):
         group_tree = getattr(group_node, "group_tree", None)
-        if group_tree is None or getattr(group_tree, "bl_idname", "") != "AFNodeTreeType":
+        if group_tree is None or _node_bl_idname(group_tree) != "AFNodeTreeType":
             raise FlowExecutionError(
                 "AF_E030",
                 "Group tree is missing",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
 
@@ -62,7 +86,7 @@ class RuntimeLinearFlowMixin:
         linked_flow_group_inputs = [
             (node, socket)
             for node, socket in flow_group_inputs
-            if bool(getattr(socket, "links", None))
+            if _safe_socket_links_present(socket)
         ]
         if linked_flow_group_inputs:
             flow_group_inputs = linked_flow_group_inputs
@@ -70,16 +94,16 @@ class RuntimeLinearFlowMixin:
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group is missing Flow output on Group Input",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
         if len(flow_group_inputs) > 1:
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group must contain exactly one flow-capable Group Input",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
         flow_input_node, flow_socket = flow_group_inputs[0]
@@ -88,7 +112,7 @@ class RuntimeLinearFlowMixin:
         linked_flow_group_outputs = [
             (node, socket)
             for node, socket in flow_group_outputs
-            if bool(getattr(socket, "links", None))
+            if _safe_socket_links_present(socket)
         ]
         if linked_flow_group_outputs:
             flow_group_outputs = linked_flow_group_outputs
@@ -96,16 +120,16 @@ class RuntimeLinearFlowMixin:
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group is missing Flow input on Group Output",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
         if len(flow_group_outputs) > 1:
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group must contain exactly one flow-capable Group Output",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
         expected_group_output, _output_flow_socket = flow_group_outputs[0]
@@ -115,8 +139,8 @@ class RuntimeLinearFlowMixin:
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group input is not connected to a group flow path",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
 
@@ -128,23 +152,23 @@ class RuntimeLinearFlowMixin:
             raise _enrich_flow_error_context(
                 exc,
                 group_node,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
-        if not group_entries or getattr(group_entries[-1].get("node"), "bl_idname", "") != "NodeGroupOutput":
+        if not group_entries or _node_bl_idname(group_entries[-1].get("node")) != "NodeGroupOutput":
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group cannot reach Group Output",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
         if group_entries[-1].get("node") != expected_group_output:
             raise FlowExecutionError(
                 "AF_E009",
                 "Flow group cannot reach the flow-capable Group Output",
-                group_node.name,
-                getattr(getattr(group_node, "id_data", None), "name", self.node_tree.name),
+                _node_name(group_node),
+                _node_tree_name(group_node, getattr(self.node_tree, "name", "")),
                 parent_group_path,
             )
         return group_entries
@@ -156,13 +180,24 @@ class RuntimeLinearFlowMixin:
         visited_identities = visited if visited is not None else set()
 
         while current is not None:
+            current_name = _node_name(current)
+            current_type = _node_bl_idname(current)
+            current_tree_name = _node_tree_name(current, getattr(self.node_tree, "name", ""))
+            if not current_type:
+                raise FlowExecutionError(
+                    "AF_E009",
+                    "Flow graph contains an invalid node reference",
+                    current_name,
+                    current_tree_name,
+                    active_group_path,
+                )
             current_identity = self._flow_entry_identity(current, active_group_path)
             if current_identity in visited_identities:
                 raise FlowExecutionError(
                     "AF_E009",
                     "Flow graph has a loop",
-                    current.name,
-                    getattr(getattr(current, "id_data", None), "name", self.node_tree.name),
+                    current_name,
+                    current_tree_name,
                     active_group_path,
                 )
             visited_identities.add(current_identity)
@@ -173,10 +208,10 @@ class RuntimeLinearFlowMixin:
                     "group_path": [dict(item) for item in active_group_path],
                 }
             )
-            if current.bl_idname in stop_node_types:
+            if current_type in stop_node_types:
                 break
 
-            if current.bl_idname == "AFNodeGroup" and not bool(getattr(current, "mute", False)):
+            if current_type == "AFNodeGroup" and not _safe_node_bool_attr(current, "mute", False):
                 entries.extend(self._collect_group_linear_flow_entries(current, active_group_path, visited_identities))
 
             current = _first_output_node(current, "Flow Out")
@@ -193,7 +228,7 @@ class RuntimeLinearFlowMixin:
             return list(found_objects.values())
         visited_nodes.add(node_identity)
 
-        if str(getattr(node, "bl_idname", "") or "") == "AFNodeReadGeometryAttribute" and not bool(getattr(node, "mute", False)):
+        if _node_bl_idname(node) == "AFNodeReadGeometryAttribute" and not _safe_node_bool_attr(node, "mute", False):
             try:
                 source_object, _source_item, _source_count = self._geometry_attribute_source_object(node, group_path)
             except Exception:
@@ -202,7 +237,7 @@ class RuntimeLinearFlowMixin:
                 found_objects[int(source_object.session_uid)] = source_object
 
         for input_socket in getattr(node, "inputs", []):
-            if str(getattr(input_socket, "bl_idname", "") or "") == "AFSocketFlow":
+            if _node_bl_idname(input_socket) == "AFSocketFlow":
                 continue
             from_node, from_socket = _find_single_from_input_socket(input_socket)
             if from_node is None:
@@ -230,7 +265,7 @@ class RuntimeLinearFlowMixin:
             return []
 
         start_tree = bpy.data.node_groups.get(start_tree_name)
-        if start_tree is None or getattr(start_tree, "bl_idname", "") != "AFNodeTreeType":
+        if start_tree is None or _node_bl_idname(start_tree) != "AFNodeTreeType":
             return []
 
         start_node = getattr(getattr(start_tree, "nodes", None), "get", lambda _name: None)(start_node_name)
@@ -250,7 +285,7 @@ class RuntimeLinearFlowMixin:
         visited = set()
         for entry in flow_entries:
             flow_node = entry.get("node")
-            if flow_node is None or bool(getattr(flow_node, "mute", False)):
+            if flow_node is None or _safe_node_bool_attr(flow_node, "mute", False):
                 continue
             for source_object in child_runner._collect_upstream_geometry_attribute_dependencies(
                 flow_node,

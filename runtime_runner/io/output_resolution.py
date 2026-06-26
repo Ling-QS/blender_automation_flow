@@ -1,11 +1,26 @@
 from mathutils import Vector
 
-from ...runtime_flow.helpers import _numeric_output_key_family, _numeric_socket_family, _socket_specific_output_key
+from ...runtime_flow.helpers import (
+    _numeric_output_key_family,
+    _numeric_socket_family,
+    _socket_specific_output_key,
+    _string_socket_family,
+)
 
 
 class RuntimeOutputResolutionMixin:
     def _socket_output_keys(self, socket):
-        socket_type = _numeric_socket_family(socket) or str(getattr(socket, "bl_idname", "") or "")
+        if socket is getattr(self, "_last_socket_output_keys_source", None):
+            return getattr(self, "_last_socket_output_keys_value", ())
+        socket_token = self._socket_cache_token(socket)
+        cache = getattr(self, "_socket_output_keys_cache", None)
+        if cache is not None and socket_token is not None:
+            cached = cache.get(socket_token)
+            if cached is not None:
+                self._last_socket_output_keys_source = socket
+                self._last_socket_output_keys_value = cached
+                return cached
+        socket_type = _numeric_socket_family(socket) or _string_socket_family(socket) or str(getattr(socket, "bl_idname", "") or "")
         socket_name = str(getattr(socket, "name", "") or "")
         keys = []
         specific_key = _socket_specific_output_key(socket)
@@ -35,24 +50,30 @@ class RuntimeOutputResolutionMixin:
             keys.append("vector_value")
         elif socket_type in {"NodeSocketRotation", "AFSocketRotationValue"}:
             keys.append("rotation_value")
-        elif socket_type == "NodeSocketMatrix":
+        elif socket_type in {"NodeSocketMatrix", "AFSocketMatrixValue"}:
             keys.append("matrix_value")
         else:
-            if socket_type in {"AFSocketString", "NodeSocketString"}:
+            if socket_type == "NodeSocketString":
                 if socket_name == "Status":
                     keys.append("status")
                 keys.append("string_value")
-                return keys
+                value = tuple(keys)
+                self._last_socket_output_keys_source = socket
+                self._last_socket_output_keys_value = value
+                if cache is not None and socket_token is not None:
+                    cache[socket_token] = value
+                return value
             custom_map = {
                 "AFSocketCollectionList": "collection_list",
                 "AFSocketObjectList": "object_list",
                 "AFSocketDisplayType": "display_type_value",
+                "AFSocketObjectInteractionMode": "object_interaction_mode_value",
                 "AFSocketRotationMode": "rotation_mode_value",
+                "AFSocketViewportShadingMode": "viewport_shading_mode_value",
                 "AFSocketPropertyPackage": "property_package",
                 "AFSocketPropertyDefinition": "property_definition",
                 "AFSocketPropertyAssignment": "property_assignment",
                 "AFSocketTaskRef": "task_ref",
-                "AFSocketStartRef": "start_ref",
                 "AFSocketTaskPlan": "task_plan",
                 "AFSocketTaskHandle": "task_handle",
                 "AFSocketReport": "report",
@@ -60,7 +81,12 @@ class RuntimeOutputResolutionMixin:
             key = custom_map.get(socket_type)
             if key:
                 keys.append(key)
-        return keys
+        value = tuple(keys)
+        self._last_socket_output_keys_source = socket
+        self._last_socket_output_keys_value = value
+        if cache is not None and socket_token is not None:
+            cache[socket_token] = value
+        return value
 
     def _coerce_numeric_output_value(self, source_key, target_key, value):
         if value is None:
@@ -127,7 +153,7 @@ class RuntimeOutputResolutionMixin:
 
         return None
 
-    def _resolve_output_value(self, from_node, from_socket, output_key, group_path=None):
+    def _resolve_output_value(self, from_node, from_socket, output_key, group_path=None, allow_missing_fallback=True):
         active_group_path = list(self.current_group_path if group_path is None else group_path)
         source_keys = []
         if from_socket is not None:
@@ -143,7 +169,7 @@ class RuntimeOutputResolutionMixin:
                 source_keys = ["float_z", "float_value"] + [key for key in source_keys if key not in {"float_z", "float_value"}]
 
         for source_key in source_keys:
-            raw_value = self._get_output(from_node, source_key, active_group_path)
+            raw_value = self._get_output(from_node, source_key, active_group_path, normalize=False)
             if raw_value is None:
                 continue
             if output_key == "string_value" and source_key == "status":
@@ -156,7 +182,14 @@ class RuntimeOutputResolutionMixin:
             if source_key == output_key:
                 return raw_value
 
-        value = self._get_output(from_node, output_key, active_group_path)
+        value = self._get_output(from_node, output_key, active_group_path, normalize=False)
+        if (
+            allow_missing_fallback
+            and value is None
+            and from_socket is not None
+            and self._socket_supports_output_key(from_socket, output_key)
+        ):
+            value = self._normalize_output_value(output_key, None, from_node)
         if value is not None:
             return value
         return None

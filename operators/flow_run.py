@@ -21,6 +21,7 @@ _AUTO_FOLLOW_SCENE_UPDATE_STATE = {}
 _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING = {}
 _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE = ""
 _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE = ""
+_AUTO_FOLLOW_RENDER_ACTIVE_DEPTH = 0
 _AUTO_FOLLOW_START_CACHE = {
     "entries": (),
     "dirty": True,
@@ -71,6 +72,25 @@ def _is_animation_playing():
         if bool(getattr(screen, "is_animation_playing", False)):
             return True
     return False
+
+
+def _is_render_job_running():
+    app_is_job_running = getattr(bpy.app, "is_job_running", None)
+    if callable(app_is_job_running):
+        try:
+            if bool(app_is_job_running("RENDER")):
+                return True
+        except Exception:
+            pass
+    return bool(_AUTO_FOLLOW_RENDER_ACTIVE_DEPTH > 0)
+
+
+def _drop_auto_follow_pending_during_render():
+    _AUTO_FOLLOW_PENDING_STARTS.clear()
+    _AUTO_FOLLOW_SCENE_EDGE_GUARD.clear()
+    _AUTO_FOLLOW_POST_RUN_DEPSGRAPH_GUARD.clear()
+    _AUTO_FOLLOW_SCENE_UPDATE_STATE.clear()
+    _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.clear()
 
 
 def _arm_auto_follow_cooldown(seconds=0.35):
@@ -375,6 +395,13 @@ def _trigger_state_payload(
     }
 
 
+def _runtime_mode_snapshot_payload(*, object_interaction_mode="", viewport_shading_mode=""):
+    return {
+        "object_interaction_mode": str(object_interaction_mode or ""),
+        "viewport_shading_mode": str(viewport_shading_mode or ""),
+    }
+
+
 def _merge_playback_state_payload(base_payload, extra_payload):
     base = dict(base_payload or {})
     extra = dict(extra_payload or {})
@@ -539,27 +566,56 @@ def _active_object_interaction_mode():
     view_layer = getattr(bpy.context, "view_layer", None)
     objects = getattr(view_layer, "objects", None) if view_layer is not None else None
     active_object = getattr(objects, "active", None) if objects is not None else None
-    return _normalize_object_interaction_mode(getattr(active_object, "mode", ""))
+    normalized = _normalize_object_interaction_mode(getattr(active_object, "mode", ""))
+    if normalized:
+        return normalized
+    return _normalize_object_interaction_mode(_AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE)
+
+
+def _viewport_shading_mode_from_space(space):
+    if getattr(space, "type", "") != "VIEW_3D":
+        return ""
+    shading = getattr(space, "shading", None)
+    return str(getattr(shading, "type", "") or "")
+
+
+def _first_viewport_shading_mode_in_screen(screen):
+    if screen is None:
+        return ""
+    for candidate_area in getattr(screen, "areas", []):
+        if getattr(candidate_area, "type", "") != "VIEW_3D":
+            continue
+        for candidate_space in getattr(candidate_area, "spaces", []):
+            mode = _viewport_shading_mode_from_space(candidate_space)
+            if mode:
+                return mode
+    return ""
 
 
 def _active_viewport_shading_mode():
     area = getattr(bpy.context, "area", None)
     space_data = getattr(bpy.context, "space_data", None)
     if getattr(area, "type", "") == "VIEW_3D" and getattr(space_data, "type", "") == "VIEW_3D":
-        shading = getattr(space_data, "shading", None)
-        return str(getattr(shading, "type", "") or "")
+        mode = _viewport_shading_mode_from_space(space_data)
+        if mode:
+            return mode
     window = getattr(bpy.context, "window", None)
     screen = getattr(window, "screen", None) if window is not None else None
-    if screen is not None:
-        for candidate_area in getattr(screen, "areas", []):
-            if getattr(candidate_area, "type", "") != "VIEW_3D":
+    mode = _first_viewport_shading_mode_in_screen(screen)
+    if mode:
+        return mode
+    wm = getattr(bpy.context, "window_manager", None)
+    if wm is not None:
+        current_screen_pointer = int(screen.as_pointer()) if screen is not None and hasattr(screen, "as_pointer") else None
+        for candidate_window in getattr(wm, "windows", []):
+            candidate_screen = getattr(candidate_window, "screen", None)
+            candidate_pointer = int(candidate_screen.as_pointer()) if candidate_screen is not None and hasattr(candidate_screen, "as_pointer") else None
+            if current_screen_pointer is not None and candidate_pointer == current_screen_pointer:
                 continue
-            for candidate_space in getattr(candidate_area, "spaces", []):
-                if getattr(candidate_space, "type", "") != "VIEW_3D":
-                    continue
-                shading = getattr(candidate_space, "shading", None)
-                return str(getattr(shading, "type", "") or "")
-    return ""
+            mode = _first_viewport_shading_mode_in_screen(candidate_screen)
+            if mode:
+                return mode
+    return str(_AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE or "")
 
 
 def _active_auto_follow_scene():
@@ -581,6 +637,8 @@ def _prime_interaction_trigger_state():
 
 def _poll_interaction_trigger_state_once():
     global _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE, _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE
+    if _is_render_job_running():
+        return
     current_object_mode = _active_object_interaction_mode()
     current_viewport_shading = _active_viewport_shading_mode()
     target_scene = _active_auto_follow_scene()
@@ -622,6 +680,9 @@ def _poll_interaction_trigger_state_once():
 
 
 def _queue_auto_follow_for_scene(scene, playback_state=None, trigger_state=None, ignore_debounce=False):
+    if _is_render_job_running():
+        _drop_auto_follow_pending_during_render()
+        return
     if scene is None:
         return
     if _scene_flow_settings(scene) is None:
@@ -834,6 +895,9 @@ def _try_run_auto_follow_immediately(scene, ignore_debounce=False):
 
 
 def _process_auto_follow_queue_once(ignore_debounce=False):
+    if _is_render_job_running():
+        _drop_auto_follow_pending_during_render()
+        return None
     if not _AUTO_FOLLOW_PENDING_STARTS:
         return None
     if _get_active_runner() is not None or _has_pending_reload_resume():
@@ -883,6 +947,10 @@ def _process_auto_follow_queue_once(ignore_debounce=False):
     entry = dict(_AUTO_FOLLOW_PENDING_STARTS.get(key) or {})
     playback_state = dict(entry.get("playback_state") or {})
     trigger_state = dict(entry.get("trigger_state") or {})
+    runtime_mode_snapshot = _runtime_mode_snapshot_payload(
+        object_interaction_mode=str(trigger_state.get("object_interaction_mode", "") or ""),
+        viewport_shading_mode=str(trigger_state.get("viewport_shading_mode", "") or ""),
+    )
     try:
         _start_runner(
             node_tree,
@@ -891,6 +959,7 @@ def _process_auto_follow_queue_once(ignore_debounce=False):
             ui_context={
                 "playback_state": playback_state,
                 "trigger_state": trigger_state,
+                **runtime_mode_snapshot,
             },
             auto_follow=True,
         )
@@ -960,6 +1029,12 @@ def _capture_runtime_ui_context(context):
         value = getattr(context, key, None)
         if value is not None:
             snapshot[key] = value
+    snapshot.update(
+        _runtime_mode_snapshot_payload(
+            object_interaction_mode=_active_object_interaction_mode(),
+            viewport_shading_mode=_active_viewport_shading_mode(),
+        )
+    )
     return snapshot
 
 
@@ -977,13 +1052,15 @@ configure_reload_resume_callbacks(
 
 
 def _clear_auto_follow_state():
-    global _AUTO_FOLLOW_TIMER_ACTIVE, _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE, _AUTO_FOLLOW_TIMER_GENERATION, _AUTO_FOLLOW_PLAYBACK_TIMER_GENERATION, _AUTO_FOLLOW_SUSPEND_DEPTH, _AUTO_FOLLOW_IGNORE_UNTIL, _AUTO_FOLLOW_LAST_PLAY_STATE, _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE, _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE
+    global _AUTO_FOLLOW_TIMER_ACTIVE, _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE, _AUTO_FOLLOW_TIMER_GENERATION, _AUTO_FOLLOW_PLAYBACK_TIMER_GENERATION, _AUTO_FOLLOW_SUSPEND_DEPTH, _AUTO_FOLLOW_IGNORE_UNTIL, _AUTO_FOLLOW_LAST_PLAY_STATE, _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE, _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE, _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH
+    _set_active_runner(None)
     _AUTO_FOLLOW_PENDING_STARTS.clear()
     _mark_auto_follow_start_cache_dirty()
     _AUTO_FOLLOW_SCENE_EDGE_GUARD.clear()
     _AUTO_FOLLOW_POST_RUN_DEPSGRAPH_GUARD.clear()
     _AUTO_FOLLOW_SCENE_UPDATE_STATE.clear()
     _AUTO_FOLLOW_SCENE_UPDATE_END_PENDING.clear()
+    _AUTO_FOLLOW_RECENT_OVERLAY["entries"] = []
     _AUTO_FOLLOW_TIMER_ACTIVE = False
     _AUTO_FOLLOW_PLAYBACK_TIMER_ACTIVE = False
     _AUTO_FOLLOW_TIMER_GENERATION += 1
@@ -993,6 +1070,7 @@ def _clear_auto_follow_state():
     _AUTO_FOLLOW_LAST_PLAY_STATE = None
     _AUTO_FOLLOW_LAST_OBJECT_INTERACTION_MODE = ""
     _AUTO_FOLLOW_LAST_VIEWPORT_SHADING_MODE = ""
+    _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH = 0
 
 
 @persistent
@@ -1007,6 +1085,8 @@ def _reset_auto_follow_after_load(_dummy):
 @persistent
 def _auto_follow_depsgraph_post(scene, _depsgraph):
     global _AUTO_FOLLOW_LAST_PLAY_STATE
+    if _is_render_job_running():
+        return
     current_play_state = bool(_is_animation_playing())
     if current_play_state:
         # `On Play` belongs to the first frame-change callback. If a depsgraph
@@ -1033,6 +1113,9 @@ def _auto_follow_depsgraph_post(scene, _depsgraph):
 
 
 def _handle_auto_follow_scene_trigger(scene, prefer_immediate=False, playback_state=None, trigger_state=None, ignore_debounce=False):
+    if _is_render_job_running():
+        _drop_auto_follow_pending_during_render()
+        return
     if _AUTO_FOLLOW_SUSPEND_DEPTH > 0:
         return
     if float(time.monotonic()) < float(_AUTO_FOLLOW_IGNORE_UNTIL):
@@ -1054,6 +1137,8 @@ def _handle_auto_follow_scene_trigger(scene, prefer_immediate=False, playback_st
 @persistent
 def _auto_follow_frame_change_post(scene, _depsgraph=None):
     global _AUTO_FOLLOW_LAST_PLAY_STATE
+    if _is_render_job_running():
+        return
     current_play_state = bool(_is_animation_playing())
     if _AUTO_FOLLOW_LAST_PLAY_STATE is None:
         _AUTO_FOLLOW_LAST_PLAY_STATE = current_play_state
@@ -1075,6 +1160,37 @@ def _auto_follow_frame_change_post(scene, _depsgraph=None):
         trigger_state=_trigger_state_payload(),
         ignore_debounce=True,
     )
+
+
+@persistent
+def _auto_follow_render_init(scene):
+    del scene
+    global _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH
+    _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH = max(0, int(_AUTO_FOLLOW_RENDER_ACTIVE_DEPTH)) + 1
+    _drop_auto_follow_pending_during_render()
+
+
+def _finish_auto_follow_render_guard():
+    global _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH
+    _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH = max(0, int(_AUTO_FOLLOW_RENDER_ACTIVE_DEPTH) - 1)
+    if _AUTO_FOLLOW_RENDER_ACTIVE_DEPTH > 0:
+        return
+    _drop_auto_follow_pending_during_render()
+    _arm_auto_follow_cooldown()
+    _prime_auto_follow_playback_state()
+    _prime_interaction_trigger_state()
+
+
+@persistent
+def _auto_follow_render_complete(scene):
+    del scene
+    _finish_auto_follow_render_guard()
+
+
+@persistent
+def _auto_follow_render_cancel(scene):
+    del scene
+    _finish_auto_follow_render_guard()
 
 
 def _remove_auto_follow_handlers():
@@ -1105,6 +1221,33 @@ def _remove_auto_follow_handlers():
                 load_handlers.remove(handler)
             except Exception:
                 pass
+    render_init_handlers = getattr(bpy.app.handlers, "render_init", None)
+    if render_init_handlers is not None:
+        target_name = getattr(_auto_follow_render_init, "__name__", "_auto_follow_render_init")
+        removable = [handler for handler in list(render_init_handlers) if getattr(handler, "__name__", "") == target_name]
+        for handler in removable:
+            try:
+                render_init_handlers.remove(handler)
+            except Exception:
+                pass
+    render_complete_handlers = getattr(bpy.app.handlers, "render_complete", None)
+    if render_complete_handlers is not None:
+        target_name = getattr(_auto_follow_render_complete, "__name__", "_auto_follow_render_complete")
+        removable = [handler for handler in list(render_complete_handlers) if getattr(handler, "__name__", "") == target_name]
+        for handler in removable:
+            try:
+                render_complete_handlers.remove(handler)
+            except Exception:
+                pass
+    render_cancel_handlers = getattr(bpy.app.handlers, "render_cancel", None)
+    if render_cancel_handlers is not None:
+        target_name = getattr(_auto_follow_render_cancel, "__name__", "_auto_follow_render_cancel")
+        removable = [handler for handler in list(render_cancel_handlers) if getattr(handler, "__name__", "") == target_name]
+        for handler in removable:
+            try:
+                render_cancel_handlers.remove(handler)
+            except Exception:
+                pass
 
 
 def set_auto_follow_playback_timer_enabled(enabled):
@@ -1123,6 +1266,9 @@ def register_handlers():
     bpy.app.handlers.load_post.append(_reset_auto_follow_after_load)
     bpy.app.handlers.depsgraph_update_post.append(_auto_follow_depsgraph_post)
     bpy.app.handlers.frame_change_post.append(_auto_follow_frame_change_post)
+    bpy.app.handlers.render_init.append(_auto_follow_render_init)
+    bpy.app.handlers.render_complete.append(_auto_follow_render_complete)
+    bpy.app.handlers.render_cancel.append(_auto_follow_render_cancel)
     set_auto_follow_playback_timer_enabled(True)
 
 

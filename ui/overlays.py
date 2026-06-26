@@ -395,6 +395,7 @@ def _custom_math_header_palette(node):
     flow_types = {
         "AFNodeStart",
         "AFNodeFlowToggle",
+        "AFNodeFlowTrigger",
         "AFNodeTaskStatusOverride",
         "AFNodeRepeatStart",
         "AFNodeRepeatEnd",
@@ -444,6 +445,7 @@ def _custom_math_header_palette(node):
         "AFNodeCombineVector",
         "AFNodeSeparateVector",
         "AFNodeVectorRotate",
+        "AFNodeRotateVector",
     }
     converter_types = {
         "AFNodeMath",
@@ -453,7 +455,6 @@ def _custom_math_header_palette(node):
         "AFNodeSwitch",
         "AFNodeIndexSwitch",
         "AFNodeCompare",
-        "AFNodeStringCompare",
         "AFNodeConvertValue",
         "AFNodeClamp",
         "AFNodeMapRange",
@@ -780,13 +781,13 @@ def _flow_toggle_link_handle_offset(x1, y1, x2, y2, curving_factor):
 
 
 def _flow_toggle_link_runtime_region_points(link, view2d, curving_factor):
-    from_socket = getattr(link, "from_socket", None)
-    to_socket = getattr(link, "to_socket", None)
-    if from_socket is None or to_socket is None:
-        return None
-    if not bool(getattr(from_socket, "enabled", False)) or not bool(getattr(to_socket, "enabled", False)):
-        return None
     try:
+        from_socket = getattr(link, "from_socket", None)
+        to_socket = getattr(link, "to_socket", None)
+        if from_socket is None or to_socket is None:
+            return None
+        if not bool(getattr(from_socket, "enabled", False)) or not bool(getattr(to_socket, "enabled", False)):
+            return None
         from_struct = _BNodeSocket.from_address(from_socket.as_pointer())
         to_struct = _BNodeSocket.from_address(to_socket.as_pointer())
         if not from_struct.runtime or not to_struct.runtime:
@@ -1007,10 +1008,13 @@ def _socket_identity(socket):
 
 
 def _flow_link_identity(link):
-    return (
-        _socket_identity(getattr(link, "from_socket", None)),
-        _socket_identity(getattr(link, "to_socket", None)),
-    )
+    try:
+        return (
+            _socket_identity(getattr(link, "from_socket", None)),
+            _socket_identity(getattr(link, "to_socket", None)),
+        )
+    except Exception:
+        return None
 
 
 def _is_flow_underlay_candidate_link(link):
@@ -1093,10 +1097,32 @@ def _flow_output_path_links_to_target(output_socket, target_socket, visited_rero
 def _add_flow_underlay_links(path_links, ordered_links, seen_links):
     for link in list(path_links or []):
         link_key = _flow_link_identity(link)
-        if link_key in seen_links:
+        if link_key is None or link_key in seen_links:
             continue
         seen_links.add(link_key)
-        ordered_links.append(link)
+        ordered_links.append(link_key)
+
+
+def _resolve_live_flow_underlay_links(node_tree, link_keys):
+    if node_tree is None or not link_keys:
+        return ()
+    live_links = {}
+    try:
+        for link in getattr(node_tree, "links", []):
+            if not _is_flow_underlay_candidate_link(link):
+                continue
+            link_key = _flow_link_identity(link)
+            if link_key is None:
+                continue
+            live_links[link_key] = link
+    except Exception:
+        return ()
+    resolved_links = []
+    for link_key in list(link_keys or ()):
+        live_link = live_links.get(link_key)
+        if live_link is not None:
+            resolved_links.append(live_link)
+    return tuple(resolved_links)
 
 
 def _extend_underlay_links_to_step_ref(
@@ -1942,7 +1968,7 @@ def _draw_flow_link_underlays(node_tree):
     line_width = max(1.2, 1.75 * scale) * 6.0
     curving_factor = _flow_toggle_link_curving_factor()
 
-    for link in _active_flow_underlay_links(node_tree):
+    for link in _resolve_live_flow_underlay_links(node_tree, _active_flow_underlay_links(node_tree)):
         link_points = _flow_link_runtime_region_points(link, view2d, curving_factor, region)
         if link_points is None:
             continue
@@ -1985,6 +2011,7 @@ def _custom_header_node_types():
     return {
         "AFNodeStart",
         "AFNodeFlowToggle",
+        "AFNodeFlowTrigger",
         "AFNodeTaskStatusOverride",
         "AFNodeRepeatStart",
         "AFNodeRepeatEnd",
@@ -2027,13 +2054,13 @@ def _custom_header_node_types():
         "AFNodeSwitch",
         "AFNodeIndexSwitch",
         "AFNodeCompare",
-        "AFNodeStringCompare",
         "AFNodeConvertValue",
         "AFNodeClamp",
         "AFNodeMapRange",
         "AFNodeCombineVector",
         "AFNodeSeparateVector",
         "AFNodeVectorRotate",
+        "AFNodeRotateVector",
         "AFNodeSmoothstep",
         "AFNodeRandomValue",
         "AFNodeSetActiveCamera",

@@ -2,6 +2,10 @@ import bpy
 from bpy.app.translations import pgettext_iface as iface_
 
 from ..i18n import af_iface
+from .config import (
+    OBJECT_INTERACTION_MODE_ITEMS,
+    VIEWPORT_SHADING_MODE_ITEMS,
+)
 from ..runtime_core.registration import safe_register_class, safe_unregister_class
 from .socket_aliases import (
     PROPERTY_ASSIGNMENT_INPUT_PREFIX,
@@ -12,6 +16,13 @@ from .socket_aliases import (
 
 MENU_SOCKET_COLOR = (0.4, 0.4, 0.4, 1.0)
 _FLOW_SOCKET_IDNAMES = {"AFSocketFlow", "AFInterfaceSocketFlow"}
+_IDENTITY_ROTATION_DEFAULT = (1.0, 0.0, 0.0, 0.0)
+_IDENTITY_MATRIX_DEFAULT = (
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+)
 
 DISPLAY_TYPE_MENU_ITEMS = (
     ("TEXTURED", "Textured", "Display the object with textured shading"),
@@ -177,8 +188,12 @@ class AFBaseNumericSocket(AFBaseSocket):
 
 class AFBaseMenuSocket(AFBaseSocket):
     af_is_virtual: bpy.props.BoolProperty(name="Virtual", default=False)
+    HIDE_DEFAULT_LABEL = False
 
     def _draw_default_value(self, layout, text):
+        if bool(getattr(self, "HIDE_DEFAULT_LABEL", False)):
+            layout.prop(self, "default_value", text="")
+            return
         layout.prop(self, "default_value", text=text if text else self.bl_label)
 
     def draw(self, context, layout, node, text):
@@ -220,8 +235,12 @@ class AFBaseMenuSocket(AFBaseSocket):
 
 class AFBaseStringSocket(AFBaseSocket):
     af_is_virtual: bpy.props.BoolProperty(name="Virtual", default=False)
+    HIDE_DEFAULT_LABEL = False
 
     def _draw_default_value(self, layout, text):
+        if bool(getattr(self, "HIDE_DEFAULT_LABEL", False)):
+            layout.prop(self, "default_value", text="")
+            return
         layout.prop(self, "default_value", text=text if text else self.bl_label)
 
     def draw(self, context, layout, node, text):
@@ -243,6 +262,9 @@ class AFBaseStringSocket(AFBaseSocket):
             )
             return
         if bool(getattr(self, "is_output", False)):
+            if node_type == "AFNodeStringInput" and str(getattr(self, "bl_idname", "") or "") == "AFSocketString":
+                self._draw_default_value(layout, text)
+                return
             layout.label(text=text if text else self.bl_label)
             return
         if not bool(getattr(self, "is_linked", False)):
@@ -265,7 +287,9 @@ _PREVIEW_CUSTOM_SOCKET_CLASS_BY_IDNAME = {
     "AFSocketObjectList": "AFSocketObjectList",
     "AFSocketString": "AFSocketString",
     "AFSocketDisplayType": "AFSocketDisplayType",
+    "AFSocketObjectInteractionMode": "AFSocketObjectInteractionMode",
     "AFSocketRotationMode": "AFSocketRotationMode",
+    "AFSocketViewportShadingMode": "AFSocketViewportShadingMode",
     "AFSocketPropertyDefinition": "AFSocketPropertyDefinition",
     "AFSocketPropertyAssignment": "AFSocketPropertyAssignment",
     "AFSocketPropertyPackage": "AFSocketPropertyPackage",
@@ -273,6 +297,7 @@ _PREVIEW_CUSTOM_SOCKET_CLASS_BY_IDNAME = {
     "AFSocketTaskPlan": "AFSocketTaskPlan",
     "AFSocketTaskHandle": "AFSocketTaskHandle",
     "AFSocketReport": "AFSocketReport",
+    "AFSocketMatrixValue": "AFSocketMatrixValue",
 }
 
 
@@ -330,6 +355,7 @@ class AFSocketString(AFBaseStringSocket):
     bl_label = "String"
     bl_icon = "SORTALPHA"
     SOCKET_COLOR = (0.44, 0.70, 1.0, 1.0)
+    HIDE_DEFAULT_LABEL = True
 
     default_value: bpy.props.StringProperty(name="Value", default="")
 
@@ -340,8 +366,25 @@ class AFSocketPropertyPackage(AFBaseSocket):
     bl_icon = "NODE_COMPOSITING"
     SOCKET_COLOR = (0.55, 0.90, 0.55, 1.0)
 
+    af_is_virtual: bpy.props.BoolProperty(name="Virtual", default=False)
+
     def draw(self, context, layout, node, text):
-        del context, node
+        del context
+        if getattr(node, "bl_idname", "") == "AFNodeIndexSwitch" and bool(getattr(self, "af_is_virtual", False)):
+            try:
+                from ..nodes import _iter_index_switch_real_inputs
+
+                real_input_count = len(_iter_index_switch_real_inputs(node))
+            except Exception:
+                real_input_count = 0
+            _draw_virtual_socket_button_row(
+                layout,
+                node,
+                "af.add_index_switch_input",
+                "af.remove_last_index_switch_input",
+                real_input_count > 1,
+            )
+            return
         display_text = _translated_indexed_socket_label(text if text else self.bl_label)
         layout.label(text=display_text, translate=False)
 
@@ -367,6 +410,21 @@ class AFSocketPropertyAssignment(AFBaseSocket):
 
     def draw(self, context, layout, node, text):
         del context
+        if getattr(node, "bl_idname", "") == "AFNodeIndexSwitch" and bool(getattr(self, "af_is_virtual", False)):
+            try:
+                from ..nodes import _iter_index_switch_real_inputs
+
+                real_input_count = len(_iter_index_switch_real_inputs(node))
+            except Exception:
+                real_input_count = 0
+            _draw_virtual_socket_button_row(
+                layout,
+                node,
+                "af.add_index_switch_input",
+                "af.remove_last_index_switch_input",
+                real_input_count > 1,
+            )
+            return
         display_text = _translated_indexed_socket_label(text if text else self.bl_label)
         layout.label(text=display_text, translate=False)
 
@@ -374,13 +432,6 @@ class AFSocketPropertyAssignment(AFBaseSocket):
 class AFSocketTaskRef(AFBaseSocket):
     bl_idname = "AFSocketTaskRef"
     bl_label = "Task Ref"
-    bl_icon = "PLAY"
-    SOCKET_COLOR = (0.95, 0.75, 0.25, 1.0)
-
-
-class AFSocketStartRef(AFBaseSocket):
-    bl_idname = "AFSocketStartRef"
-    bl_label = "Start Ref"
     bl_icon = "PLAY"
     SOCKET_COLOR = (0.95, 0.75, 0.25, 1.0)
 
@@ -444,6 +495,9 @@ class AFSocketPreviewData(AFBaseSocket):
             layout.label(text=text if text else self.bl_label)
             return
         if bool(getattr(self, "af_is_virtual", False)):
+            if getattr(node, "bl_idname", "") == "AFNodeSampleContextData":
+                layout.label(text="")
+                return
             layout.label(text=text if text else self.bl_label)
             return
         layout.label(text=text if text else self.bl_label)
@@ -502,41 +556,52 @@ class AFSocketVectorValue(AFBaseNumericSocket):
     default_value: bpy.props.FloatVectorProperty(name="Value", size=3, default=(0.0, 0.0, 0.0), subtype="XYZ")
 
     def _draw_default_value(self, layout, text):
+        root_col = layout.column(align=True)
         if text:
-            layout.label(text=text)
-        col = layout.column(align=True)
-        col.prop(self, "default_value", index=0, text="X")
-        col.prop(self, "default_value", index=1, text="Y")
-        col.prop(self, "default_value", index=2, text="Z")
+            root_col.label(text=text)
+        value_col = root_col.column(align=True)
+        value_col.prop(self, "default_value", index=0, text="X")
+        value_col.prop(self, "default_value", index=1, text="Y")
+        value_col.prop(self, "default_value", index=2, text="Z")
 
 
-class AFSocketRotationValue(AFBaseSocket):
+class AFSocketRotationValue(AFBaseNumericSocket):
     bl_idname = "AFSocketRotationValue"
     bl_label = "Rotation"
     bl_icon = "DRIVER_ROTATIONAL_DIFFERENCE"
     SOCKET_COLOR = (0.65, 0.39, 0.78, 1.0)
 
-    def draw(self, context, layout, node, text):
-        del context
-        try:
-            from ..nodes import _draw_property_data_input_socket
+    default_value: bpy.props.FloatVectorProperty(name="Value", size=4, default=_IDENTITY_ROTATION_DEFAULT)
 
-            if _draw_property_data_input_socket(self, layout, node, text):
-                return
-        except Exception:
-            pass
+    def _draw_default_value(self, layout, text):
+        root_col = layout.column(align=True)
+        if text:
+            root_col.label(text=text)
+        value_col = root_col.column(align=True)
+        value_col.prop(self, "default_value", index=0, text="W")
+        value_col.prop(self, "default_value", index=1, text="X")
+        value_col.prop(self, "default_value", index=2, text="Y")
+        value_col.prop(self, "default_value", index=3, text="Z")
 
-        layout.label(text=text if text else self.bl_label)
 
-    def draw_color(self, context, node):
-        del context
-        if _socket_is_virtual(node, self):
-            return _virtual_socket_color()
-        return self.SOCKET_COLOR
+class AFSocketMatrixValue(AFBaseNumericSocket):
+    bl_idname = "AFSocketMatrixValue"
+    bl_label = "Matrix"
+    bl_icon = "SNAP_VOLUME"
+    SOCKET_COLOR = (0.72, 0.20, 0.52, 1.0)
 
-    @classmethod
-    def draw_color_simple(cls):
-        return cls.SOCKET_COLOR
+    default_value: bpy.props.FloatVectorProperty(name="Value", size=16, default=_IDENTITY_MATRIX_DEFAULT)
+
+    def _draw_default_value(self, layout, text):
+        root_col = layout.column(align=True)
+        if text:
+            root_col.label(text=text)
+        value_col = root_col.column(align=True)
+        for row_index in range(4):
+            row = value_col.row(align=True)
+            for column_index in range(4):
+                flat_index = row_index * 4 + column_index
+                row.prop(self, "default_value", index=flat_index, text="")
 
 
 class AFSocketDisplayType(AFBaseMenuSocket):
@@ -544,6 +609,7 @@ class AFSocketDisplayType(AFBaseMenuSocket):
     bl_label = "Display Type"
     bl_icon = "DOWNARROW_HLT"
     SOCKET_COLOR = MENU_SOCKET_COLOR
+    HIDE_DEFAULT_LABEL = True
 
     default_value: bpy.props.EnumProperty(name="Display Type", items=DISPLAY_TYPE_MENU_ITEMS, default="TEXTURED")
 
@@ -553,8 +619,29 @@ class AFSocketRotationMode(AFBaseMenuSocket):
     bl_label = "Rotation Mode"
     bl_icon = "DOWNARROW_HLT"
     SOCKET_COLOR = MENU_SOCKET_COLOR
+    HIDE_DEFAULT_LABEL = True
 
     default_value: bpy.props.EnumProperty(name="Rotation Mode", items=ROTATION_MODE_MENU_ITEMS, default="XYZ")
+
+
+class AFSocketObjectInteractionMode(AFBaseMenuSocket):
+    bl_idname = "AFSocketObjectInteractionMode"
+    bl_label = "Object Interaction Mode"
+    bl_icon = "DOWNARROW_HLT"
+    SOCKET_COLOR = MENU_SOCKET_COLOR
+    HIDE_DEFAULT_LABEL = True
+
+    default_value: bpy.props.EnumProperty(name="Object Interaction Mode", items=OBJECT_INTERACTION_MODE_ITEMS, default="OBJECT")
+
+
+class AFSocketViewportShadingMode(AFBaseMenuSocket):
+    bl_idname = "AFSocketViewportShadingMode"
+    bl_label = "Viewport Shading Mode"
+    bl_icon = "DOWNARROW_HLT"
+    SOCKET_COLOR = MENU_SOCKET_COLOR
+    HIDE_DEFAULT_LABEL = True
+
+    default_value: bpy.props.EnumProperty(name="Viewport Shading Mode", items=VIEWPORT_SHADING_MODE_ITEMS, default="SOLID")
 
 
 class AFSocketReport(AFBaseSocket):
@@ -611,12 +698,6 @@ class AFInterfaceSocketTaskRef(AFBaseInterfaceSocket):
     bl_icon = "PLAY"
 
 
-class AFInterfaceSocketStartRef(AFBaseInterfaceSocket):
-    bl_socket_idname = "AFSocketStartRef"
-    bl_label = "Start Ref"
-    bl_icon = "PLAY"
-
-
 class AFInterfaceSocketTaskPlan(AFBaseInterfaceSocket):
     bl_socket_idname = "AFSocketTaskPlan"
     bl_label = "Task Plan"
@@ -664,11 +745,119 @@ class AFInterfaceSocketDisplayType(AFBaseInterfaceSocket):
     bl_label = "Display Type"
     bl_icon = "DOWNARROW_HLT"
 
+    default_value: bpy.props.EnumProperty(name="Display Type", items=DISPLAY_TYPE_MENU_ITEMS, default="TEXTURED")
+
+    def init_socket(self, node, socket, data_path):
+        del node, data_path
+        try:
+            socket.default_value = str(getattr(self, "default_value", "TEXTURED") or "TEXTURED")
+        except Exception:
+            pass
+        try:
+            socket.hide_value = bool(getattr(self, "hide_value", False))
+        except Exception:
+            pass
+
+    def from_socket(self, node, socket):
+        del node
+        try:
+            self.default_value = str(getattr(socket, "default_value", "TEXTURED") or "TEXTURED")
+        except Exception:
+            pass
+        try:
+            self.hide_value = bool(getattr(socket, "hide_value", False))
+        except Exception:
+            pass
+
 
 class AFInterfaceSocketRotationMode(AFBaseInterfaceSocket):
     bl_socket_idname = "AFSocketRotationMode"
     bl_label = "Rotation Mode"
     bl_icon = "DOWNARROW_HLT"
+
+    default_value: bpy.props.EnumProperty(name="Rotation Mode", items=ROTATION_MODE_MENU_ITEMS, default="XYZ")
+
+    def init_socket(self, node, socket, data_path):
+        del node, data_path
+        try:
+            socket.default_value = str(getattr(self, "default_value", "XYZ") or "XYZ")
+        except Exception:
+            pass
+        try:
+            socket.hide_value = bool(getattr(self, "hide_value", False))
+        except Exception:
+            pass
+
+    def from_socket(self, node, socket):
+        del node
+        try:
+            self.default_value = str(getattr(socket, "default_value", "XYZ") or "XYZ")
+        except Exception:
+            pass
+        try:
+            self.hide_value = bool(getattr(socket, "hide_value", False))
+        except Exception:
+            pass
+
+
+class AFInterfaceSocketObjectInteractionMode(AFBaseInterfaceSocket):
+    bl_socket_idname = "AFSocketObjectInteractionMode"
+    bl_label = "Object Interaction Mode"
+    bl_icon = "DOWNARROW_HLT"
+
+    default_value: bpy.props.EnumProperty(name="Object Interaction Mode", items=OBJECT_INTERACTION_MODE_ITEMS, default="OBJECT")
+
+    def init_socket(self, node, socket, data_path):
+        del node, data_path
+        try:
+            socket.default_value = str(getattr(self, "default_value", "OBJECT") or "OBJECT")
+        except Exception:
+            pass
+        try:
+            socket.hide_value = bool(getattr(self, "hide_value", False))
+        except Exception:
+            pass
+
+    def from_socket(self, node, socket):
+        del node
+        try:
+            self.default_value = str(getattr(socket, "default_value", "OBJECT") or "OBJECT")
+        except Exception:
+            pass
+        try:
+            self.hide_value = bool(getattr(socket, "hide_value", False))
+        except Exception:
+            pass
+
+
+class AFInterfaceSocketViewportShadingMode(AFBaseInterfaceSocket):
+    bl_socket_idname = "AFSocketViewportShadingMode"
+    bl_label = "Viewport Shading Mode"
+    bl_icon = "DOWNARROW_HLT"
+
+    default_value: bpy.props.EnumProperty(name="Viewport Shading Mode", items=VIEWPORT_SHADING_MODE_ITEMS, default="SOLID")
+
+    def init_socket(self, node, socket, data_path):
+        del node, data_path
+        try:
+            socket.default_value = str(getattr(self, "default_value", "SOLID") or "SOLID")
+        except Exception:
+            pass
+        try:
+            socket.hide_value = bool(getattr(self, "hide_value", False))
+        except Exception:
+            pass
+
+    def from_socket(self, node, socket):
+        del node
+        try:
+            self.default_value = str(getattr(socket, "default_value", "SOLID") or "SOLID")
+        except Exception:
+            pass
+        try:
+            self.hide_value = bool(getattr(socket, "hide_value", False))
+        except Exception:
+            pass
 
 
 class AFInterfaceSocketReport(AFBaseInterfaceSocket):
@@ -695,7 +884,6 @@ CLASSES = (
     AFSocketPropertyDefinition,
     AFSocketPropertyAssignment,
     AFSocketTaskRef,
-    AFSocketStartRef,
     AFSocketTaskPlan,
     AFSocketTaskHandle,
     AFSocketPreviewData,
@@ -704,8 +892,11 @@ CLASSES = (
     AFSocketBooleanValue,
     AFSocketVectorValue,
     AFSocketRotationValue,
+    AFSocketMatrixValue,
     AFSocketDisplayType,
+    AFSocketObjectInteractionMode,
     AFSocketRotationMode,
+    AFSocketViewportShadingMode,
     AFSocketReport,
     AFInterfaceSocketFlow,
     AFInterfaceSocketCollectionList,
@@ -715,12 +906,13 @@ CLASSES = (
     AFInterfaceSocketPropertyDefinition,
     AFInterfaceSocketPropertyAssignment,
     AFInterfaceSocketTaskRef,
-    AFInterfaceSocketStartRef,
     AFInterfaceSocketTaskPlan,
     AFInterfaceSocketTaskHandle,
     AFInterfaceSocketRotationValue,
     AFInterfaceSocketDisplayType,
+    AFInterfaceSocketObjectInteractionMode,
     AFInterfaceSocketRotationMode,
+    AFInterfaceSocketViewportShadingMode,
     AFInterfaceSocketReport,
 )
 

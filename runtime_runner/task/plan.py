@@ -39,6 +39,19 @@ from ...runtime_task_target import (
 
 
 class RuntimeTaskPlanMixin:
+    def _task_ref_issue(self, task_ref, node_name, missing_message="Task Ref not found"):
+        if self._is_valid_reference_payload("task_ref", task_ref):
+            return None
+        if isinstance(task_ref, dict):
+            invalid_issue = _invalid_task_ref_issue(task_ref)
+            if invalid_issue is not None:
+                return invalid_issue
+        return {
+            "code": "AF_E011",
+            "message": str(missing_message or "Task Ref not found"),
+            "node_name": str(node_name or ""),
+        }
+
     def _validate_background_task_ref_support(self, task_ref, step_node_name):
         task_kind = str(task_ref.get("task_kind", TASK_KIND_GEOMETRY) or TASK_KIND_GEOMETRY)
         if task_kind in {TASK_KIND_PHYSICS, TASK_KIND_PHYSICS_BAKE_ALL}:
@@ -59,9 +72,7 @@ class RuntimeTaskPlanMixin:
             self.current_group_path = list(step_ref.get("group_path", []))
             try:
                 task_ref = self._get_linked_output(step_node, "Task Ref", "task_ref")
-                if task_ref is None:
-                    raise FlowExecutionError("AF_E011", "Task Ref not found", step_node.name)
-                invalid_issue = _invalid_task_ref_issue(task_ref)
+                invalid_issue = self._task_ref_issue(task_ref, step_node.name)
                 if invalid_issue is not None:
                     raise FlowExecutionError(
                         str(invalid_issue.get("code", "AF_E011") or "AF_E011"),
@@ -132,7 +143,7 @@ class RuntimeTaskPlanMixin:
             self.current_group_path = list(step_ref.get("group_path", []))
             try:
                 task_ref = self._get_linked_output(step_node, "Task Ref", "task_ref")
-                if task_ref is None:
+                if self._task_ref_issue(task_ref, step_node.name) is not None:
                     continue
                 task_ref = self._rehydrate_task_ref_payload(task_ref, scene=self.scene)
                 task_ref = self._raise_invalid_task_ref_issue(task_ref, step_node.name)
@@ -180,7 +191,7 @@ class RuntimeTaskPlanMixin:
             self.current_group_path = list(step_ref.get("group_path", []))
             try:
                 task_ref = self._get_linked_output(step_node, "Task Ref", "task_ref")
-                if task_ref is None:
+                if self._task_ref_issue(task_ref, step_node.name) is not None:
                     continue
                 task_ref = self._rehydrate_task_ref_payload(task_ref, scene=self.scene)
                 task_ref = self._raise_invalid_task_ref_issue(task_ref, step_node.name)
@@ -235,7 +246,7 @@ class RuntimeTaskPlanMixin:
             self.current_group_path = list(step_ref.get("group_path", []))
             try:
                 task_ref = self._get_linked_output(step_node, "Task Ref", "task_ref")
-                if task_ref is None:
+                if self._task_ref_issue(task_ref, step_node.name) is not None:
                     continue
                 task_ref = self._rehydrate_task_ref_payload(task_ref, scene=self.scene)
                 task_ref = self._raise_invalid_task_ref_issue(task_ref, step_node.name)
@@ -515,7 +526,7 @@ class RuntimeTaskPlanMixin:
                 if not entry["enabled"]:
                     continue
                 task_plan = entry.get("task_plan")
-                if task_plan is None:
+                if not self._is_valid_reference_payload("task_plan", task_plan):
                     raise FlowExecutionError("AF_E011", f"{entry['title']} is not linked to a valid Task Plan", node.name)
                 total_steps += int(entry.get("step_count", len(task_plan.get("step_names", []))))
             return total_steps
@@ -921,10 +932,7 @@ class RuntimeTaskPlanMixin:
             self.current_group_path = list(step_ref.get("group_path", []))
             try:
                 task_ref = self._get_linked_output(step_node, "Task Ref", "task_ref")
-                if task_ref is None:
-                    issues.append(self._make_issue("AF_E011", "Task Ref not found", step_node.name))
-                    continue
-                invalid_issue = _invalid_task_ref_issue(task_ref)
+                invalid_issue = self._task_ref_issue(task_ref, step_node.name)
                 if invalid_issue is not None:
                     issues.append(
                         self._make_issue(
@@ -1018,7 +1026,7 @@ class RuntimeTaskPlanMixin:
             self.current_group_path = list(step_ref.get("group_path", []))
             try:
                 task_ref = self._get_linked_output(step_node, "Task Ref", "task_ref")
-                if task_ref is None:
+                if self._task_ref_issue(task_ref, step_node.name) is not None:
                     continue
                 task_ref = self._rehydrate_task_ref_payload(task_ref, scene=self.scene)
                 task_ref = self._raise_invalid_task_ref_issue(task_ref, step_node.name)
@@ -1504,7 +1512,7 @@ class RuntimeTaskPlanMixin:
                 if not entry["enabled"]:
                     continue
                 task_plan = entry.get("task_plan")
-                if task_plan is None or str(task_plan.get("plan_kind", "")) != TASK_PLAN_KIND:
+                if not self._is_valid_reference_payload("task_plan", task_plan):
                     raise FlowExecutionError("AF_E011", f"{entry['title']} is not linked to a valid Task Plan", run_node.name)
             self.current_task_plan = {
                 "run_node_name": run_node.name,
